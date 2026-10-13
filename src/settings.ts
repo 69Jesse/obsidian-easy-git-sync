@@ -54,25 +54,8 @@ export interface DeviceSettings {
 export function defaultDeviceName(): string {
 	if (Platform.isIosApp) return Platform.isTablet ? "iPad" : "iPhone";
 	if (Platform.isAndroidApp) return Platform.isTablet ? "Android tablet" : "Android phone";
-	const host = hostname();
-	if (host) return host;
-	return Platform.isMacOS ? "Mac" : Platform.isWin ? "Windows PC" : "Computer";
-}
-
-function hostname(): string {
-	const nodeRequire = (window as unknown as { require?: (id: string) => unknown }).require;
-	try {
-		const os = nodeRequire?.("os") as { hostname(): string } | undefined;
-		return (
-			os
-				?.hostname()
-				.replace(/\.local$/, "")
-				.replace(/-/g, " ")
-				.trim() ?? ""
-		);
-	} catch {
-		return "";
-	}
+	if (Platform.isMacOS) return "Mac";
+	return Platform.isWin ? "Windows PC" : "Linux PC";
 }
 
 const SYNC_AFTER_EDIT: [string, string][] = [
