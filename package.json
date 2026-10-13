@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "node --env-file-if-exists=.env esbuild.config.mjs --watch",
 		"build": "npm run check && node esbuild.config.mjs --production",
-		"check": "tsc --noEmit && biome check . && eslint . && vitest run",
+		"check": "tsc --noEmit && biome check && eslint src *.mjs && vitest run",
 		"format": "biome check --write .",
 		"test": "vitest run",
 		"test:watch": "vitest"
