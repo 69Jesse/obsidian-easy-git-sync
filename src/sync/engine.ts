@@ -254,6 +254,8 @@ export interface SyncPreview {
 	deleteHere: number;
 	deleteThere: number;
 	emptyRemote: boolean;
+	// outside the config folder: a fresh vault always has config files of its own
+	notes: { here: number; there: number; differ: number };
 }
 
 export async function preview(state: SyncState, options: SyncOptions): Promise<SyncPreview> {
@@ -275,6 +277,7 @@ export async function preview(state: SyncState, options: SyncOptions): Promise<S
 		local,
 		new Map([...remoteFiles].map(([p, f]) => [p, f.sha] as const)),
 	);
+	const isNote = (path: string) => !path.startsWith(`${options.configDir}/`);
 	const count = (...kinds: Action["kind"][]) =>
 		actions.filter((a) => kinds.includes(a.kind)).length;
 	let same = 0;
@@ -287,6 +290,11 @@ export async function preview(state: SyncState, options: SyncOptions): Promise<S
 		deleteHere: count("delete-local"),
 		deleteThere: count("delete-remote"),
 		emptyRemote: head === null,
+		notes: {
+			here: [...local.keys()].filter(isNote).length,
+			there: [...remoteFiles.keys()].filter(isNote).length,
+			differ: actions.filter((a) => isNote("path" in a ? a.path : a.to)).length,
+		},
 	};
 }
 

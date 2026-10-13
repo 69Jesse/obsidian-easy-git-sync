@@ -37,6 +37,24 @@ describe("first sync", () => {
 		);
 	});
 
+	it("counts a vault with only config files as having no notes", async () => {
+		const remote = new MemoryRemote();
+		await remote.pushDirect({ "a.md": "a\n", ".obsidian/app.json": "{}\n" });
+		const phone = new Device("iPhone", remote);
+		phone.fs.set(".obsidian/app.json", '{"theme":"dark"}\n');
+		phone.fs.set(".obsidian/plugins/easy-git-sync/main.js", "plugin\n");
+		expect((await phone.preview()).notes).toEqual({ here: 0, there: 1, differ: 1 });
+	});
+
+	it("counts notes that differ on both sides", async () => {
+		const remote = new MemoryRemote();
+		await remote.pushDirect({ "a.md": "a\n", "b.md": "b\n" });
+		const phone = new Device("iPhone", remote);
+		phone.fs.set("a.md", "a\n");
+		phone.fs.set("c.md", "c\n");
+		expect((await phone.preview()).notes).toEqual({ here: 2, there: 2, differ: 2 });
+	});
+
 	it("downloads everything into an empty vault", async () => {
 		const { mac, phone } = await setup({ "a.md": "a\n", "folder/b.md": "b\n" });
 		expect(phone.fs.text()).toEqual(mac.fs.text());

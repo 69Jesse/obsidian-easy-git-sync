@@ -1,8 +1,8 @@
 import { decodeText, encodeUtf8 } from "../lib/bytes";
 import { isSuperseded } from "../lib/format";
 import { gitBlobSha } from "../lib/githash";
-import type { ConflictStrategy, FirstSync, SyncReport } from "./engine";
-import { sync } from "./engine";
+import type { ConflictStrategy, FirstSync, SyncOptions, SyncPreview, SyncReport } from "./engine";
+import { preview, sync } from "./engine";
 import type {
 	Change,
 	KeptCommit,
@@ -303,6 +303,10 @@ export class Device {
 		readonly remote: MemoryRemote,
 	) {}
 
+	preview(): Promise<SyncPreview> {
+		return preview(this.state, this.options());
+	}
+
 	async sync(
 		options: {
 			allowMassDelete?: boolean;
@@ -310,7 +314,14 @@ export class Device {
 			firstSync?: FirstSync;
 		} = {},
 	): Promise<SyncReport> {
-		const result = await sync(this.state, {
+		const result = await sync(this.state, { ...this.options(), ...options });
+		this.state = result.state;
+		this.lastReport = result.report;
+		return result.report;
+	}
+
+	private options(): SyncOptions {
+		return {
 			fs: this.fs,
 			remote: this.remote,
 			device: this.name,
@@ -320,10 +331,6 @@ export class Device {
 				this.state = state;
 			},
 			now: () => new Date(2026, 9, 6, 14, 31),
-			...options,
-		});
-		this.state = result.state;
-		this.lastReport = result.report;
-		return result.report;
+		};
 	}
 }

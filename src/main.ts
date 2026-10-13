@@ -322,13 +322,12 @@ export default class EasyGitSync extends Plugin {
 		}
 		this.setStatus({ kind: "idle" });
 		const repo = this.device.repo ?? "";
-		// asked only when both sides have files that differ: a fresh phone never offers to wipe GitHub
+		// asked only when both sides have notes that differ: a fresh phone never offers to wipe GitHub
 		const hereOnly = summary.upload;
 		const thereOnly = summary.download;
-		const bothHave =
-			summary.same + hereOnly + summary.merge > 0 && summary.same + thereOnly + summary.merge > 0;
+		const { notes } = summary;
 		let firstSync: FirstSync = "merge";
-		if (!summary.emptyRemote && bothHave && hereOnly + thereOnly + summary.merge > 0) {
+		if (!summary.emptyRemote && notes.here > 0 && notes.there > 0 && notes.differ > 0) {
 			const chosen = await chooseFirstSync(this.app, {
 				repo,
 				same: summary.same,
