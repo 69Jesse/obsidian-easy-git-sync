@@ -163,21 +163,36 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 						else button.setWarning();
 					});
 				};
+				const changes = (replaced: number, deleted: number, where: string) =>
+					[
+						replaced > 0 && `${files(replaced)} replaced`,
+						deleted > 0 && `${files(deleted)} deleted ${where}`,
+					]
+						.filter(Boolean)
+						.join(" and ");
+				const differ =
+					s.merge > 0
+						? ` The ${files(s.merge)} that differ otherwise merge, and where both changed the same place ${s.newest ? "the newer version is kept" : "both versions are kept, marked"}.`
+						: "";
 				choice(
 					"Merge",
-					`Keep everything from both: files only on one side are copied to the other. A file here that is an older version from GitHub's history just updates. The ${files(s.merge)} that differ otherwise merge, and where both changed the same place ${s.newest ? "the newer version is kept" : "both versions are kept, marked"}.`,
+					`Keep everything from both: files only on one side are copied to the other. A file here that is an older version from GitHub's history just updates.${differ}`,
 					"Merge",
 					"merge",
 				);
+				const here = changes(s.merge, s.upload, "here");
 				choice(
 					"Use GitHub's version",
-					`Make this vault a copy of GitHub's: ${files(s.merge)} replaced and ${files(s.upload)} deleted here. Both go to the trash.`,
+					here
+						? `Make this vault a copy of GitHub's: ${here}. ${s.merge > 0 && s.upload > 0 ? "Both go" : "They go"} to the trash.`
+						: "Make this vault a copy of GitHub's.",
 					"Use GitHub's",
 					"use-remote",
 				);
+				const there = changes(s.merge, s.download, "there");
 				choice(
 					"Use this vault",
-					`Make GitHub's a copy of this vault: ${files(s.merge)} replaced and ${files(s.download)} deleted there, in one commit. GitHub's history keeps the old versions.`,
+					`Make GitHub's a copy of this vault${there ? `: ${there},` : ","} in one commit. GitHub's history keeps the old versions.`,
 					"Use this vault",
 					"use-local",
 				);

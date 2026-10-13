@@ -1,4 +1,11 @@
-import { type App, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
+import {
+	type App,
+	type DropdownComponent,
+	Notice,
+	Platform,
+	PluginSettingTab,
+	Setting,
+} from "obsidian";
 import type EasyGitSync from "./main";
 import { RepoPickerModal } from "./modals";
 import type { ConflictStrategy, FirstSync } from "./sync/engine";
@@ -68,26 +75,32 @@ function hostname(): string {
 	}
 }
 
-const SYNC_AFTER_EDIT: Record<string, string> = {
-	"10": "10 seconds",
-	"30": "30 seconds",
-	"60": "1 minute",
-	"300": "5 minutes",
-	"0": "Only when I ask",
-};
+const SYNC_AFTER_EDIT: [string, string][] = [
+	["10", "10 seconds"],
+	["30", "30 seconds"],
+	["60", "1 minute"],
+	["300", "5 minutes"],
+	["0", "Only when I ask"],
+];
+
+// in order: a record would sort its integer-like keys and put "Only when I ask" on top
+function addOptions(dropdown: DropdownComponent, options: [string, string][]): DropdownComponent {
+	for (const [value, label] of options) dropdown.addOption(value, label);
+	return dropdown;
+}
 
 const CONFLICTS: Record<ConflictStrategy, string> = {
 	"keep-both": "Keep both, marked",
 	newest: "Keep the newer version",
 };
 
-const CHECK_INTERVAL: Record<string, string> = {
-	"30": "30 seconds",
-	"60": "1 minute",
-	"300": "5 minutes",
-	"900": "15 minutes",
-	"0": "Only when I ask",
-};
+const CHECK_INTERVAL: [string, string][] = [
+	["30", "30 seconds"],
+	["60", "1 minute"],
+	["300", "5 minutes"],
+	["900", "15 minutes"],
+	["0", "Only when I ask"],
+];
 
 export const TOKEN_URL =
 	"https://github.com/settings/personal-access-tokens/new?" +
@@ -198,8 +211,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			.setName("Sync after editing")
 			.setDesc("How long after you stop typing to upload changes.")
 			.addDropdown((dropdown) =>
-				dropdown
-					.addOptions(SYNC_AFTER_EDIT)
+				addOptions(dropdown, SYNC_AFTER_EDIT)
 					.setValue(String(plugin.settings.syncAfterEdit))
 					.onChange(async (value) => {
 						plugin.settings.syncAfterEdit = Number(value);
@@ -213,8 +225,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 				"How often to look for changes from other devices. It also looks on startup and when you return to Obsidian.",
 			)
 			.addDropdown((dropdown) =>
-				dropdown
-					.addOptions(CHECK_INTERVAL)
+				addOptions(dropdown, CHECK_INTERVAL)
 					.setValue(String(plugin.settings.checkInterval))
 					.onChange(async (value) => {
 						plugin.settings.checkInterval = Number(value);
@@ -243,7 +254,9 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			new Setting(containerEl)
 				.setName("Resolve all conflicts")
 				.setDesc(
-					`${conflicts} ${conflicts === 1 ? "note still has" : "notes still have"} a conflict. Keep the newer version in every one of them.`,
+					conflicts === 1
+						? "1 note still has a conflict. Keep the newer version in it."
+						: `${conflicts} notes still have a conflict. Keep the newer version in every one of them.`,
 				)
 				.addButton((button) =>
 					button.setButtonText("Keep newer").onClick(async () => {
