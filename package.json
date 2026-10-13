@@ -1,0 +1,31 @@
+{
+	"name": "obsidian-easy-git-sync",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "node --env-file-if-exists=.env esbuild.config.mjs --watch",
+		"build": "npm run check && node esbuild.config.mjs --production",
+		"check": "tsc --noEmit && biome check . && eslint . && vitest run",
+		"format": "biome check --write .",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"ignore": "^7.0.12",
+		"node-diff3": "^3.2.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.5",
+		"@codemirror/state": "^6.5.0",
+		"@codemirror/view": "^6.38.6",
+		"@types/node": "^24.0.0",
+		"esbuild": "^0.28.1",
+		"eslint": "^9.30.1",
+		"eslint-plugin-obsidianmd": "^0.4.2",
+		"obsidian": "^1.13.1",
+		"typescript": "^5.9.0",
+		"typescript-eslint": "^8.35.1",
+		"vitest": "^4.1.10"
+	}
+}
