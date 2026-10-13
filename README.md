@@ -24,21 +24,9 @@ Turn the Git plugin off on devices that use Easy Git Sync. It waits until it is.
 
 ## Conflicts
 
-A conflict is a block of ordinary git conflict markers, so any editor or git tool understands it:
+![A sync conflict in a note, with Keep MacBook, Keep iPhone (newer) and Keep both buttons](images/conflict.png)
 
-```
-<<<<<<< MacBook, 2026-10-06 14:28 (sync conflict)
-
-Meeting moved to Friday, 10:00.
-
-=======
-
-Meeting moved to Thursday.
-
->>>>>>> iPhone, 2026-10-06 14:31
-```
-
-In Obsidian the block is coloured, with **Keep MacBook**, **Keep iPhone** and **Keep both** buttons on its first line, the newer side marked **(newer)**. *Resolve all sync conflicts with the newer version* settles every block at once.
+The block is ordinary git conflict markers, so any editor or git tool can read it too. *Resolve all sync conflicts with the newer version* settles every block at once.
 
 ## Privacy
 
