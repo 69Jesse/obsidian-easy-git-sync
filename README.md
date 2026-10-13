@@ -29,7 +29,7 @@ The block is ordinary git conflict markers, so any editor or git tool can read i
 
 ## Privacy
 
-Easy Git Sync connects only to GitHub: `api.github.com`, and `codeload.github.com` for the first download of a large repository. It sends your vault to the repository you pick and nowhere else, and has no telemetry.
+Easy Git Sync needs a GitHub account and connects only to GitHub: `api.github.com`, and `codeload.github.com` for the first download of a large repository. It sends your vault to the repository you pick and nowhere else, and has no telemetry.
 
 On desktop, if the vault folder is itself a clone of the same repository, it runs `git` in that folder to keep the clone up to date.
 
