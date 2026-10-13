@@ -1,7 +1,7 @@
 {
 	"id": "easy-git-sync",
 	"name": "Easy Git Sync",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"minAppVersion": "1.11.4",
 	"description": "Easy, uncompromising Git sync for your vault, on desktop and mobile.",
 	"author": "69Jesse",
