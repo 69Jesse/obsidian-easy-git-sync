@@ -52,8 +52,7 @@ export class GitHubClient {
 	constructor(
 		private readonly http: Http,
 		private readonly token: () => string | null,
-		private readonly sleep: (ms: number) => Promise<void> = (ms) =>
-			new Promise((resolve) => setTimeout(resolve, ms)),
+		private readonly sleep: (ms: number) => Promise<void>,
 	) {}
 
 	async request(method: string, path: string, options: RequestOptions = {}): Promise<HttpResponse> {

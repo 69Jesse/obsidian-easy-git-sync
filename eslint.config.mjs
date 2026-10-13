@@ -25,6 +25,7 @@ export default defineConfig([
 			"obsidianmd/hardcoded-config-path": "off",
 			"obsidianmd/no-global-this": "off",
 			"obsidianmd/no-nodejs-modules": "off",
+			"obsidianmd/prefer-window-timers": "off",
 		},
 	},
 ]);

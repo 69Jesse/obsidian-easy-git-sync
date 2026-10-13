@@ -111,7 +111,11 @@ export default class EasyGitSync extends Plugin {
 		await this.loadSettings();
 		this.loadDevice();
 		this.fs = new ObsidianFs(this.app);
-		this.client = new GitHubClient(obsidianHttp, () => this.token());
+		this.client = new GitHubClient(
+			obsidianHttp,
+			() => this.token(),
+			(ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+		);
 
 		this.addSettingTab(new EasyGitSyncSettingTab(this.app, this));
 		this.registerEditorExtension(conflictEditorExtension());

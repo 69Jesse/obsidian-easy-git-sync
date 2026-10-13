@@ -8,6 +8,8 @@ import { GitLockstep } from "./lockstep";
 import { GitHubClient, GitHubRemote } from "./remote/github";
 import type { Http } from "./remote/http";
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 const token = process.env.EASY_GIT_TOKEN;
 const repo = process.env.EASY_GIT_REPO;
 
@@ -36,7 +38,11 @@ describe.skipIf(!token || !repo)("git lockstep, live", () => {
 			encoding: "utf8",
 			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
 		}).trim();
-	const remote = new GitHubRemote(new GitHubClient(http, () => token ?? null), repo ?? "", "main");
+	const remote = new GitHubRemote(
+		new GitHubClient(http, () => token ?? null, sleep),
+		repo ?? "",
+		"main",
+	);
 	const stateFile = ".obsidian/plugins/easy-git-sync/state.json";
 
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));

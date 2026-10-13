@@ -6,6 +6,8 @@ import { emptyState, type SyncState } from "../sync/types";
 import { GitHubClient, GitHubRemote } from "./github";
 import type { Http } from "./http";
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 const token = process.env.EASY_GIT_TOKEN;
 const repo = process.env.EASY_GIT_REPO;
 
@@ -53,7 +55,7 @@ class LiveDevice {
 }
 
 describe.skipIf(!token || !repo)("GitHub, live", () => {
-	const client = new GitHubClient(http, () => token ?? null);
+	const client = new GitHubClient(http, () => token ?? null, sleep);
 	const remote = new GitHubRemote(client, repo ?? "", "main");
 	const run = Date.now().toString(36);
 	const dir = `live-${run}`;
