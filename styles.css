@@ -1,0 +1,205 @@
+/* VS Code's inline merge colours, from its editorColors.ts */
+body {
+	--easy-git-sync-current-header: rgba(64, 200, 174, 0.5);
+	--easy-git-sync-current: rgba(64, 200, 174, 0.2);
+	--easy-git-sync-incoming-header: rgba(64, 166, 255, 0.5);
+	--easy-git-sync-incoming: rgba(64, 166, 255, 0.2);
+	--easy-git-sync-common-header: rgba(96, 96, 96, 0.4);
+	--easy-git-sync-common: rgba(96, 96, 96, 0.16);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-current-header {
+	background-color: var(--easy-git-sync-current-header);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-current {
+	background-color: var(--easy-git-sync-current);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-common-header {
+	background-color: var(--easy-git-sync-common-header);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-common {
+	background-color: var(--easy-git-sync-common);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-incoming {
+	background-color: var(--easy-git-sync-incoming);
+}
+
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-incoming-header {
+	background-color: var(--easy-git-sync-incoming-header);
+}
+
+/* live preview draws `>>>>>>>` as a quote, undone so marker lines read as plain text */
+.markdown-source-view.mod-cm6 .cm-line.easy-git-sync-marker-line.HyperMD-quote::before,
+.markdown-source-view.mod-cm6 .easy-git-sync-marker-line .cm-blockquote-border::before {
+	display: none;
+}
+
+.markdown-source-view.mod-cm6 .easy-git-sync-marker-line .cm-blockquote-border {
+	display: inline;
+}
+
+.markdown-source-view.mod-cm6 .easy-git-sync-marker-line .cm-transparent,
+.markdown-source-view.mod-cm6 .easy-git-sync-marker-line .cm-formatting-quote,
+.cm-s-obsidian .hmd-inactive-line.easy-git-sync-marker-line span.cm-formatting-quote,
+.markdown-source-view.mod-cm6 .easy-git-sync-marker-line .cm-quote {
+	color: var(--text-normal);
+	font-style: normal;
+}
+
+/* baseline alignment, middle included, pushed the buttons to the bottom of the line */
+.easy-git-sync-buttons {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	height: calc(1em * var(--line-height-normal));
+	vertical-align: top;
+	margin-inline-start: var(--size-4-3);
+	font-family: var(--font-interface);
+}
+
+.easy-git-sync-button {
+	font-size: var(--font-ui-smaller);
+	padding: 0 var(--size-4-2);
+	height: auto;
+	line-height: 1.5;
+}
+
+.markdown-rendered .easy-git-sync-current-header {
+	background-color: var(--easy-git-sync-current-header);
+}
+
+.markdown-rendered .easy-git-sync-current {
+	background-color: var(--easy-git-sync-current);
+}
+
+.markdown-rendered .easy-git-sync-common-header {
+	background-color: var(--easy-git-sync-common-header);
+}
+
+.markdown-rendered .easy-git-sync-common {
+	background-color: var(--easy-git-sync-common);
+}
+
+.markdown-rendered .easy-git-sync-incoming {
+	background-color: var(--easy-git-sync-incoming);
+}
+
+.markdown-rendered .easy-git-sync-incoming-header {
+	background-color: var(--easy-git-sync-incoming-header);
+}
+
+.easy-git-sync-reading-marker {
+	margin: 0;
+}
+
+.easy-git-sync-status {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+}
+
+.easy-git-sync-status-icon {
+	display: inline-flex;
+}
+
+.easy-git-sync-status-icon svg {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+@keyframes easy-git-sync-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.easy-git-sync-status.is-syncing .easy-git-sync-status-icon svg,
+.easy-git-sync-ribbon.is-syncing svg {
+	animation: easy-git-sync-spin 1.2s linear infinite;
+}
+
+.easy-git-sync-ribbon.has-conflicts {
+	color: rgb(var(--color-orange-rgb));
+}
+
+.easy-git-sync-ribbon.has-problem {
+	color: var(--text-error);
+}
+
+.easy-git-sync-modal .easy-git-sync-choice:first-of-type {
+	border-top: none;
+}
+
+.easy-git-sync-warning {
+	padding: var(--size-4-3);
+	margin-bottom: var(--size-4-4);
+	border-radius: var(--radius-m);
+	background-color: rgba(var(--color-orange-rgb), 0.12);
+	color: var(--text-normal);
+}
+
+/* the field as wide as its button: `width: 0` keeps it out of the column's intrinsic width */
+.easy-git-sync-token-setting .setting-item-control {
+	flex: 0 0 auto;
+	flex-direction: column;
+	align-items: stretch;
+	align-self: flex-start;
+}
+
+.easy-git-sync-token-setting .setting-item-control input {
+	width: 0;
+	min-width: 100%;
+}
+
+.easy-git-sync-account {
+	margin-top: var(--size-4-1);
+	color: var(--text-accent);
+}
+
+.easy-git-sync-account.mod-warning {
+	color: var(--text-error);
+}
+
+.easy-git-sync-muted {
+	color: var(--text-muted);
+}
+
+/* a modal's close button is `.modal-header-button`, `.modal-close-button` is the lightbox's */
+.easy-git-sync-modal .modal-header-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	width: var(--size-4-8);
+	height: var(--size-4-8);
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--search-clear-button-color, var(--text-muted));
+}
+
+.easy-git-sync-modal .modal-header-button:hover {
+	background-color: transparent;
+	color: var(--text-normal);
+}
+
+.easy-git-sync-modal .modal-header-button svg {
+	display: none;
+}
+
+.easy-git-sync-modal .modal-header-button::after {
+	content: "";
+	display: block;
+	width: 17px;
+	height: 17px;
+	background-color: currentColor;
+	-webkit-mask-image: url("data:image/svg+xml,<svg viewBox=%270 0 12 12%27 fill=%27none%27 xmlns=%27http://www.w3.org/2000/svg%27%3E%3Cpath fill-rule=%27evenodd%27 clip-rule=%27evenodd%27 d=%27M6 12C9.31371 12 12 9.31371 12 6C12 2.68629 9.31371 0 6 0C2.68629 0 0 2.68629 0 6C0 9.31371 2.68629 12 6 12ZM3.8705 3.09766L6.00003 5.22718L8.12955 3.09766L8.9024 3.8705L6.77287 6.00003L8.9024 8.12955L8.12955 8.9024L6.00003 6.77287L3.8705 8.9024L3.09766 8.12955L5.22718 6.00003L3.09766 3.8705L3.8705 3.09766Z%27 fill=%27currentColor%27/></svg>");
+	-webkit-mask-repeat: no-repeat;
+	-webkit-mask-size: contain;
+	mask-image: url("data:image/svg+xml,<svg viewBox=%270 0 12 12%27 fill=%27none%27 xmlns=%27http://www.w3.org/2000/svg%27%3E%3Cpath fill-rule=%27evenodd%27 clip-rule=%27evenodd%27 d=%27M6 12C9.31371 12 12 9.31371 12 6C12 2.68629 9.31371 0 6 0C2.68629 0 0 2.68629 0 6C0 9.31371 2.68629 12 6 12ZM3.8705 3.09766L6.00003 5.22718L8.12955 3.09766L8.9024 3.8705L6.77287 6.00003L8.9024 8.12955L8.12955 8.9024L6.00003 6.77287L3.8705 8.9024L3.09766 8.12955L5.22718 6.00003L3.09766 3.8705L3.8705 3.09766Z%27 fill=%27currentColor%27/></svg>");
+	mask-repeat: no-repeat;
+	mask-size: contain;
+}
