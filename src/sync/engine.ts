@@ -266,10 +266,15 @@ export async function preview(state: SyncState, options: SyncOptions): Promise<S
 			? new Map<string, RemoteFile>()
 			: (await readRemote(options.remote, state, head, options, report)).files;
 	const tracked = new Set([...Object.keys(state.base), ...remoteFiles.keys()]);
-	const ignores =
-		head !== null && state.commit === null
-			? await remoteIgnores(remoteFiles, head, options)
-			: undefined;
+	let ignores: Map<string, string> | undefined;
+	// an empty repository gets the starting `.gitignore` before anything is uploaded
+	let addsGitignore = false;
+	if (head === null) {
+		addsGitignore = !(await hasFile(options.fs, ".gitignore"));
+		if (addsGitignore) ignores = new Map([["", defaultGitignore(options.configDir)]]);
+	} else if (state.commit === null) {
+		ignores = await remoteIgnores(remoteFiles, head, options);
+	}
 	const scan = await scanLocal(options.fs, state.cache, tracked, options.stateFile, ignores);
 	const local = new Map([...scan.files].map(([p, e]) => [p, e.sha] as const));
 	const actions = plan(
@@ -284,7 +289,7 @@ export async function preview(state: SyncState, options: SyncOptions): Promise<S
 	for (const [path, sha] of local) if (remoteFiles.get(path)?.sha === sha) same++;
 	return {
 		same,
-		upload: count("push", "resurrect", "push-renamed"),
+		upload: count("push", "resurrect", "push-renamed") + (addsGitignore ? 1 : 0),
 		download: count("pull", "restore", "pull-renamed"),
 		merge: count("merge"),
 		deleteHere: count("delete-local"),
@@ -314,6 +319,15 @@ function emptyReport(): SyncReport {
 		commit: null,
 		initialized: false,
 	};
+}
+
+async function hasFile(fs: LocalFs, path: string): Promise<boolean> {
+	try {
+		await fs.read(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function initialize(options: SyncOptions): Promise<void> {

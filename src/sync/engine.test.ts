@@ -55,6 +55,17 @@ describe("first sync", () => {
 		expect((await phone.preview()).notes).toEqual({ here: 2, there: 2, differ: 2 });
 	});
 
+	it("previews an empty repository with the starting .gitignore applied", async () => {
+		const remote = new MemoryRemote();
+		const mac = new Device("MacBook", remote);
+		mac.fs.set("a.md", "a\n");
+		mac.fs.set(".obsidian/app.json", "{}\n");
+		mac.fs.set(".obsidian/workspace.json", "{}\n");
+		const { upload } = await mac.preview();
+		await mac.sync();
+		expect(upload).toBe(Object.keys(remote.snapshot()).length);
+	});
+
 	it("downloads everything into an empty vault", async () => {
 		const { mac, phone } = await setup({ "a.md": "a\n", "folder/b.md": "b\n" });
 		expect(phone.fs.text()).toEqual(mac.fs.text());
