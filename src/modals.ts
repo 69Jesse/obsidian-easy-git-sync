@@ -184,7 +184,7 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 				choice(
 					"Use GitHub's version",
 					here
-						? `Make this vault a copy of GitHub's: ${here}. ${s.merge > 0 && s.upload > 0 ? "Both go" : "They go"} to the trash.`
+						? `Make this vault a copy of GitHub's: ${here}. ${s.merge > 0 && s.upload > 0 ? "Both go" : s.merge + s.upload === 1 ? "It goes" : "They go"} to the trash.`
 						: "Make this vault a copy of GitHub's.",
 					"Use GitHub's",
 					"use-remote",
