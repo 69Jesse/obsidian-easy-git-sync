@@ -2,12 +2,16 @@
 
 Sync your Obsidian vault with a GitHub repository, on desktop and mobile.
 
-<!-- demo video -->
-
 - Runs entirely inside Obsidian, phones included: no git or other app required.
 - Edits from different devices merge line by line. Where two touch the same line, both versions stay in the note, one tap to keep either.
 - Nothing is lost: an edit beats a deletion, and every version stays in the history.
 - An ordinary git repository, one commit per sync, named after the device and what changed.
+
+Set up in under a minute:
+
+<p align="center">
+  <img src="images/setup.webp" alt="Setting up Easy Git Sync on an iPhone: paste a token, pick the repository, start syncing" width="294">
+</p>
 
 ## Setup
 
