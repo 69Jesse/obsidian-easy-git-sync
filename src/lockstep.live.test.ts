@@ -90,7 +90,8 @@ describe.skipIf(!token || !repo)("git lockstep, live", () => {
 		git("add", file);
 		git("commit", "--quiet", "-m", "made by hand");
 		const local = git("rev-parse", "HEAD");
-		await lockstep.beforeSync(synced);
+		const before = await lockstep.beforeSync(synced);
+		expect(before).toBe(local);
 		expect(await remote.head()).toBe(local);
 
 		const head = (await remote.head()) ?? "";
@@ -103,7 +104,7 @@ describe.skipIf(!token || !repo)("git lockstep, live", () => {
 		});
 		if (result === "moved") throw new Error("branch moved during the test");
 		writeFileSync(join(dir, "untouched.txt"), "working tree file\n");
-		await lockstep.afterSync(result.commit);
+		await lockstep.afterSync(result.commit, local);
 		expect(git("rev-parse", "HEAD")).toBe(result.commit);
 		expect(git("log", "-1", "--format=%s")).toBe("vault backup: lockstep test");
 		// still on disk, since reset --mixed leaves the working tree alone

@@ -516,8 +516,12 @@ export default class EasyGitSync extends Plugin {
 				}
 				return;
 			}
-			if (lockstep)
-				await lockstep.beforeSync(state.commit).catch((e: unknown) => warn("git push", e));
+			const before = lockstep
+				? await lockstep.beforeSync(state.commit).catch((e: unknown) => {
+						warn("git push", e);
+						return null;
+					})
+				: null;
 
 			const first = state.commit === null;
 			const result = await sync(state, this.syncOptions(allowMassDelete));
@@ -530,8 +534,8 @@ export default class EasyGitSync extends Plugin {
 			}
 
 			const commit = result.state.commit;
-			if (lockstep && commit)
-				await lockstep.afterSync(commit).catch((e: unknown) => warn("git reset", e));
+			if (lockstep && commit && before)
+				await lockstep.afterSync(commit, before).catch((e: unknown) => warn("git reset", e));
 
 			this.lastFullSync = Date.now();
 			this.lastSynced = new Date();

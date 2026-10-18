@@ -79,32 +79,73 @@ export class GitLockstep {
 		}
 	}
 
-	async beforeSync(synced: string | null): Promise<void> {
-		if (!(await this.safe())) return;
-		if ((await this.head()) === synced) return;
+	// the HEAD afterSync may move on from; null leaves HEAD alone
+	async beforeSync(synced: string | null): Promise<string | null> {
+		if (!(await this.safe())) return null;
+		const head = await this.head();
+		if (head === synced) return head;
 		await this.fetch();
-		const ahead = Number((await this.git(["rev-list", "--count", "FETCH_HEAD..HEAD"])).trim());
-		if (!(ahead > 0)) return;
-		const ancestor = await this.git(["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"]).then(
+		const fetched = (await this.git(["rev-parse", "FETCH_HEAD"])).trim();
+		const ahead = Number((await this.git(["rev-list", "--count", `${fetched}..${head}`])).trim());
+		if (!(ahead > 0)) return head;
+		const ancestor = await this.git(["merge-base", "--is-ancestor", fetched, head]).then(
 			() => true,
 			() => false,
 		);
-		// diverged: the content is in the working tree and goes up with the sync
-		if (!ancestor) return;
-		await this.git(["push", this.url(), `HEAD:refs/heads/${this.branch}`]);
+		const tip = ancestor ? head : await this.replay(fetched, head);
+		// a failed push throws, so afterSync is skipped and HEAD keeps the commits for the next sync
+		if (tip !== fetched) await this.git(["push", this.url(), `${tip}:refs/heads/${this.branch}`]);
+		return head;
 	}
 
-	async afterSync(commit: string): Promise<void> {
-		if (!(await this.safe()) || (await this.head()) === commit) return;
-		// reset --mixed rebuilds the index, so anything staged wins and the branch catches up later
-		const staged = await this.git(["diff", "--cached", "--quiet"]).then(
-			() => false,
-			() => true,
-		);
-		if (staged) return;
+	// merge-tree and commit-tree rather than a rebase, which would rewrite the working tree
+	private async replay(onto: string, head: string): Promise<string> {
+		const commits = (await this.git(["rev-list", "--reverse", "--topo-order", `${onto}..${head}`]))
+			.split("\n")
+			.filter(Boolean);
+		let tip = onto;
+		for (const commit of commits) {
+			const [, parent, ...more] = (await this.git(["rev-list", "--parents", "-n", "1", commit]))
+				.trim()
+				.split(" ");
+			// a merge or a root commit has no one parent to replay from: the sync uploads it from disk
+			if (parent === undefined || more.length > 0) return onto;
+			// exits 1 on a conflict: the sync merges the same content from disk instead
+			const merged = await this.git([
+				"merge-tree",
+				"--write-tree",
+				"--no-messages",
+				`--merge-base=${parent}`,
+				tip,
+				commit,
+			]).catch(() => null);
+			if (merged === null) return onto;
+			const tree = merged.split("\n")[0]?.trim() ?? "";
+			// an earlier sync already uploaded this change from disk: dropped, as a rebase would
+			if (tree === (await this.git(["rev-parse", `${tip}^{tree}`])).trim()) continue;
+			const [name, email, date, ...message] = (
+				await this.git(["log", "-1", "--format=%an%n%ae%n%ad%n%B", "--date=raw", commit])
+			).split("\n");
+			tip = (
+				await this.git(["commit-tree", tree, "-p", tip, "-m", message.join("\n").trim()], {
+					GIT_AUTHOR_NAME: name,
+					GIT_AUTHOR_EMAIL: email,
+					GIT_AUTHOR_DATE: date,
+				})
+			).trim();
+		}
+		return tip;
+	}
+
+	async afterSync(commit: string, before: string): Promise<void> {
+		if (!(await this.safe())) return;
+		const head = await this.head();
+		// a commit made while the sync ran would be dropped by the reset; the next sync replays it
+		if (head === commit || head !== before) return;
 		await this.fetch();
 		const fetched = (await this.git(["rev-parse", "FETCH_HEAD"])).trim();
 		if (fetched !== commit) return;
+		// unstages anything staged, which the sync already uploaded from disk
 		await this.git(["reset", "--mixed", "-q", "FETCH_HEAD"]);
 		await this.git(["update-ref", `refs/remotes/origin/${this.branch}`, "FETCH_HEAD"]).catch(
 			() => "",
@@ -176,10 +217,11 @@ export class GitLockstep {
 		);
 	}
 
-	private git(args: string[]): Promise<string> {
+	private git(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {
 		const token = this.token();
 		const env: Record<string, string | undefined> = {
 			...process.env,
+			...extraEnv,
 			// macOS apps launched from the Dock do not get the shell's PATH
 			PATH: [
 				process.env.PATH,
