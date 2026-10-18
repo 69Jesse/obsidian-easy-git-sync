@@ -85,6 +85,42 @@ describe("mergeLines", () => {
 		]);
 	});
 
+	it("takes a line one side added under an edit both sides made", () => {
+		const base = ["# Tasks", "- [ ] ship it ^a1", ""];
+		const ticked = ["# Tasks", "- [/] ship it ^a1", ""];
+		const noted = ["# Tasks", "- [/] ship it ^a1", "\t- started 17/10", ""];
+		expect(mergeLines(base, ticked, noted)).toEqual([{ ok: noted }]);
+		expect(mergeLines(base, noted, ticked)).toEqual([{ ok: noted }]);
+	});
+
+	it("keeps lines both sides added to the same edit, remote first", () => {
+		expect(mergeLines(["x"], ["X", "phone"], ["X", "mac"])).toEqual([
+			{ ok: ["X", "mac", "phone"] },
+		]);
+	});
+
+	it("still conflicts where the shared edit deleted a line the other side rewrote", () => {
+		expect(mergeLines(["x", "y"], ["X"], ["X", "Y"])).toEqual([
+			{ ok: ["X"] },
+			{ conflict: { remote: ["Y"], local: [] } },
+		]);
+		expect(mergeLines(["x"], ["", "phone"], ["", "mac"])).toEqual([
+			{ ok: [""] },
+			{ conflict: { remote: ["mac"], local: ["phone"] } },
+		]);
+	});
+
+	it("leaves a one-sided edit next to a clash out of its block", () => {
+		const base = ["a", "b", "c", "d"];
+		const local = ["a", "phone", "c", "D"];
+		const remote = ["a", "mac", "C", "d"];
+		expect(mergeLines(base, local, remote)).toEqual([
+			{ ok: ["a"] },
+			{ conflict: { remote: ["mac", "C"], local: ["phone", "c"] } },
+			{ ok: ["D"] },
+		]);
+	});
+
 	it("without a base keeps common lines once and every line only one side has", () => {
 		const local = ["# 2026-10-06", "", "## Tasks", "- [ ] phone task"];
 		const remote = ["# 2026-10-06", "", "## Tasks", "- [ ] mac task"];

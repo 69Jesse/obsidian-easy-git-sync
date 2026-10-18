@@ -37,10 +37,7 @@ export function mergeLines(base: string[] | null, local: string[], remote: strin
 			continue;
 		}
 		const conflict = region.conflict;
-		if (!conflict) continue;
-		const zipped = interleave(conflict.o, conflict.b, conflict.a);
-		if (zipped) push(segments, { ok: zipped });
-		else pushDifference(segments, conflict.b, conflict.a, true);
+		if (conflict) resplit(segments, conflict.o, conflict.b, conflict.a);
 	}
 	return tidy(segments);
 }
@@ -49,6 +46,10 @@ interface Hunk {
 	start: number;
 	length: number;
 	lines: string[];
+}
+
+interface SideHunk extends Hunk {
+	side: 0 | 1;
 }
 
 function hunks(base: string[], side: string[]): Hunk[] {
@@ -61,38 +62,106 @@ function hunks(base: string[], side: string[]): Hunk[] {
 
 // diff3 conflicts on edits to neighbouring lines, as git does for code. In a note those are
 // separate edits, so a region only conflicts where both sides changed the same base line
-function interleave(base: string[], remote: string[], local: string[]): string[] | null {
-	const all = [
-		...hunks(base, remote).map((h) => ({ ...h, side: 0 })),
-		...hunks(base, local).map((h) => ({ ...h, side: 1 })),
+function resplit(segments: Segment[], base: string[], remote: string[], local: string[]): void {
+	const all: SideHunk[] = [
+		...hunks(base, remote).map((h) => ({ ...h, side: 0 as const })),
+		...hunks(base, local).map((h) => ({ ...h, side: 1 as const })),
 	].sort((x, y) => x.start - y.start || x.length - y.length || x.side - y.side);
 
-	for (let i = 0; i < all.length; i++) {
-		for (let j = i + 1; j < all.length; j++) {
-			const x = all[i];
-			const y = all[j];
-			if (!x || !y || x.side === y.side) continue;
-			if (overlaps(x, y)) return null;
-		}
+	const groups: SideHunk[][] = [];
+	for (const hunk of all) {
+		const group = groups[groups.length - 1];
+		if (group?.some((h) => h.side !== hunk.side && overlaps(h, hunk))) group.push(hunk);
+		else groups.push([hunk]);
 	}
 
-	const out: string[] = [];
 	let at = 0;
-	for (let i = 0; i < all.length; i++) {
-		const h = all[i];
-		if (!h) continue;
-		out.push(...base.slice(at, h.start));
-		const next = all[i + 1];
-		if (next && h.length === 0 && next.length === 0 && next.start === h.start) {
-			out.push(...unionLines(h.lines, next.lines));
+	for (let i = 0; i < groups.length; i++) {
+		const group = groups[i];
+		const first = group?.[0];
+		if (!group || !first) continue;
+		const end = Math.max(...group.map((h) => h.start + h.length));
+		push(segments, { ok: base.slice(at, first.start) });
+		const next = groups[i + 1]?.[0];
+		if (group.length > 1) {
+			const span = base.slice(first.start, end);
+			settle(
+				segments,
+				span,
+				apply(span, first.start, group, 0),
+				apply(span, first.start, group, 1),
+			);
+		} else if (
+			next &&
+			groups[i + 1]?.length === 1 &&
+			first.length === 0 &&
+			next.length === 0 &&
+			next.start === first.start
+		) {
+			push(segments, { ok: unionLines(first.lines, next.lines) });
 			i++;
 		} else {
-			out.push(...h.lines);
+			push(segments, { ok: first.lines });
 		}
-		at = Math.max(at, h.start + h.length);
+		at = Math.max(at, end);
 	}
-	out.push(...base.slice(at));
+	push(segments, { ok: base.slice(at) });
+}
+
+function apply(span: string[], offset: number, group: SideHunk[], side: 0 | 1): string[] {
+	const out: string[] = [];
+	let at = 0;
+	for (const h of group) {
+		if (h.side !== side) continue;
+		out.push(...span.slice(at, h.start - offset), ...h.lines);
+		at = h.start - offset + h.length;
+	}
+	out.push(...span.slice(at));
 	return out;
+}
+
+// both sides changed the same lines. When they made the same edit and one or both only added
+// lines to it (a task ticked on both, with a line under it on one), keeping all loses nothing
+function settle(segments: Segment[], base: string[], remote: string[], local: string[]): void {
+	if (onlyAdded(base, remote, local)) push(segments, { ok: unionLines(remote, local) });
+	else pushDifference(segments, remote, local, true);
+}
+
+function onlyAdded(base: string[], remote: string[], local: string[]): boolean {
+	const fromRemote = added(base, remote);
+	const fromLocal = added(base, local);
+	const common: string[] = [];
+	let r = 0;
+	let l = 0;
+	for (const part of diffComm(remote, local)) {
+		if (part.common) {
+			common.push(...part.common);
+			r += part.common.length;
+			l += part.common.length;
+			continue;
+		}
+		for (let i = 0; i < part.buffer1.length; i++) if (!fromRemote.has(r + i)) return false;
+		for (let i = 0; i < part.buffer2.length; i++) if (!fromLocal.has(l + i)) return false;
+		r += part.buffer1.length;
+		l += part.buffer2.length;
+	}
+	// the shared edit must not remove a line: an edit against a deletion stays a conflict. Blank
+	// lines do not count, or a line both blanked and rewrote apart would read as agreed
+	return hunks(base, common).every(
+		(h) => filled(h.lines) >= filled(base.slice(h.start, h.start + h.length)),
+	);
+}
+
+function added(base: string[], side: string[]): Set<number> {
+	const out = new Set<number>();
+	for (const d of diffIndices(base, side)) {
+		for (let i = 0; i < d.buffer2[1]; i++) out.add(d.buffer2[0] + i);
+	}
+	return out;
+}
+
+function filled(lines: string[]): number {
+	return lines.filter((line) => line.trim() !== "").length;
 }
 
 function overlaps(x: Hunk, y: Hunk): boolean {
