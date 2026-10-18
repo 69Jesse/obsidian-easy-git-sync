@@ -15,7 +15,7 @@ Set up in under a minute:
 
 ## Setup
 
-1. Install Easy Git Sync from Community plugins and open its settings.
+1. Install [Easy Git Sync](https://community.obsidian.md/plugins/easy-git-sync) from Community plugins and open its settings.
 2. Press **Create token on GitHub**. The form opens filled in: under *Repository access*, pick your vault's repository (an empty private one is fine), then generate the token and copy it.
 3. Paste it into **Access token**, press **Choose** to pick the repository, then **Start syncing**. You see what will be uploaded, downloaded and merged before anything happens.
 
