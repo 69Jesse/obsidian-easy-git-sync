@@ -134,7 +134,13 @@ export class GitHubClient {
 			if (batch.length < 100) break;
 		}
 		await pool(out, CONCURRENCY, async (repo) => {
-			repo.canPush = await this.tokenCanPush(repo);
+			try {
+				repo.canPush = await this.tokenCanPush(repo);
+			} catch (error) {
+				// one repository GitHub won't answer for (blocked, erroring) must not hide the rest
+				if (isAccountWide(error)) throw error;
+				repo.canPush = false;
+			}
 		});
 		return out;
 	}
@@ -179,6 +185,8 @@ interface RawRepo {
 	private: boolean;
 	default_branch: string | null;
 	permissions?: { push?: boolean };
+	// GitHub blocked it (a DMCA takedown, say), and every request to it answers 451
+	disabled?: boolean;
 	size: number;
 	pushed_at: string | null;
 }
@@ -190,9 +198,15 @@ function toRepo(raw: RawRepo): GitHubRepo {
 		fullName: raw.full_name,
 		private: raw.private,
 		defaultBranch: raw.default_branch || "main",
-		canPush: raw.permissions?.push ?? false,
+		canPush: !raw.disabled && (raw.permissions?.push ?? false),
 		empty: raw.size === 0 && raw.pushed_at === null,
 	};
+}
+
+// failures every repository would hit, so the list should fail too
+function isAccountWide(error: unknown): boolean {
+	if (error instanceof OfflineError) return true;
+	return error instanceof GitHubError && (error.kind === "auth" || error.kind === "rate-limit");
 }
 
 function parseJson<T>(response: HttpResponse): T {
