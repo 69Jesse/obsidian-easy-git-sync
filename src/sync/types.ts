@@ -42,6 +42,8 @@ export interface Change {
 
 export interface Remote {
 	head(): Promise<string | null>;
+	// the tree last synced, rebuilt from the state; a remote may use it instead of downloading it
+	seed?(commit: string, tree: string, files: Map<string, RemoteFile>): Promise<void>;
 	readTree(commit: string): Promise<RemoteTree>;
 	// with `each`, blobs are handed to it as they arrive and the returned map stays empty
 	readBlobs(

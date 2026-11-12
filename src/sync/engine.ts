@@ -48,6 +48,8 @@ export interface SyncOptions {
 	firstSync?: FirstSync;
 	now?: () => Date;
 	progress?(message: string): void;
+	// how messages and conflict labels name the remote side, such as GitLab or "the server"
+	remoteName?: string;
 }
 
 export interface SyncReport {
@@ -71,8 +73,9 @@ export class MassDeleteError extends Error {
 	constructor(
 		readonly here: number,
 		readonly there: number,
+		where = "GitHub",
 	) {
-		super(`This sync would delete ${here} files here and ${there} on GitHub.`);
+		super(`This sync would delete ${here} files here and ${there} on ${where}.`);
 	}
 }
 
@@ -86,6 +89,7 @@ export async function sync(
 	const { fs, remote } = options;
 	const now = options.now ?? (() => new Date());
 	const report = emptyReport();
+	const name = remoteName(options);
 	let state = initial;
 
 	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -96,7 +100,7 @@ export async function sync(
 			continue;
 		}
 
-		options.progress?.("Checking GitHub");
+		options.progress?.(`Checking ${name}`);
 		const { tree, files: remoteFiles } = await readRemote(remote, state, head, options, report);
 		const first = state.commit === null;
 		// a rerun after the first half of a first sync is saved is an ordinary sync
@@ -114,7 +118,7 @@ export async function sync(
 			if (first) await findHistoricalBases(base, local, remoteShas, head, options);
 			const renames = await confirmRenames(base, local, remoteShas, scan.files, head, options);
 			actions = plan(base, local, remoteShas, renames);
-			if (!options.allowMassDelete) guardMassDelete(actions, base.size);
+			if (!options.allowMassDelete) guardMassDelete(actions, base.size, name);
 		} else {
 			// no mass-delete guard: the user asked for exactly this
 			const own = `${options.stateFile.slice(0, options.stateFile.lastIndexOf("/"))}/`;
@@ -175,7 +179,7 @@ export async function sync(
 				continue;
 			}
 			if (upload.size > MAX_FILE_SIZE) {
-				report.skipped.push({ path, reason: "larger than GitHub's 100 MB limit" });
+				report.skipped.push({ path, reason: "larger than 100 MB" });
 				continue;
 			}
 			if (existing?.sha === upload.sha) continue;
@@ -243,7 +247,7 @@ export async function sync(
 		);
 		return { state, report };
 	}
-	throw new Error("GitHub kept changing while syncing. Will try again shortly.");
+	throw new Error(`${name} kept changing while syncing. Will try again shortly.`);
 }
 
 export interface SyncPreview {
@@ -351,12 +355,14 @@ async function readRemote(
 	options: SyncOptions,
 	report: SyncReport,
 ): Promise<{ tree: string; files: Map<string, RemoteFile> }> {
-	if (head === state.commit && state.tree) {
+	if (state.commit !== null && state.tree) {
 		const files = new Map<string, RemoteFile>();
 		for (const [path, sha] of Object.entries(state.base)) {
 			files.set(path, { sha, mode: state.modes[path] ?? "100644" });
 		}
-		return { tree: state.tree, files };
+		// a remote that builds commits itself needs the last synced tree, and has it from here
+		await remote.seed?.(state.commit, state.tree, files);
+		if (head === state.commit) return { tree: state.tree, files };
 	}
 	const read = await remote.readTree(head);
 	const files = new Map<string, RemoteFile>();
@@ -368,7 +374,7 @@ async function readRemote(
 		if (lower.has(key)) {
 			report.skipped.push({
 				path,
-				reason: "differs from another file on GitHub only in letter case",
+				reason: `differs from another file on ${remoteName(options)} only in letter case`,
 			});
 			continue;
 		}
@@ -420,7 +426,7 @@ async function findHistoricalBases(
 	if (differing.length === 0) return;
 	let budget = HISTORY_BUDGET;
 	let done = 0;
-	options.progress?.("Looking through GitHub's history");
+	options.progress?.(`Looking through ${remoteName(options)}'s history`);
 	await pool(differing, 4, async (path) => {
 		if (budget <= 0) return;
 		let versions: string[];
@@ -429,7 +435,9 @@ async function findHistoricalBases(
 		} catch {
 			return;
 		} finally {
-			options.progress?.(`Looking through GitHub's history (${++done} of ${differing.length})`);
+			options.progress?.(
+				`Looking through ${remoteName(options)}'s history (${++done} of ${differing.length})`,
+			);
 		}
 		budget -= versions.length + 1;
 		const sha = local.get(path);
@@ -490,11 +498,11 @@ async function confirmRenames(
 	return confirmed;
 }
 
-function guardMassDelete(actions: Action[], baseSize: number): void {
+function guardMassDelete(actions: Action[], baseSize: number, where: string): void {
 	const here = actions.filter((a) => a.kind === "delete-local").length;
 	const there = actions.filter((a) => a.kind === "delete-remote").length;
 	const limit = Math.max(20, baseSize / 2);
-	if (here > limit || there > limit) throw new MassDeleteError(here, there);
+	if (here > limit || there > limit) throw new MassDeleteError(here, there, where);
 }
 
 interface Upload {
@@ -557,7 +565,7 @@ async function applyIncoming(
 
 	const blob = (sha: string, path: string): Uint8Array => {
 		const bytes = blobs.get(sha);
-		if (!bytes) throw new Error(`Could not download ${path} from GitHub.`);
+		if (!bytes) throw new Error(`Could not download ${path} from ${remoteName(options)}.`);
 		return bytes;
 	};
 	const readLocal = (path: string): Promise<Uint8Array> => {
@@ -592,7 +600,7 @@ async function applyIncoming(
 	// one request per sync for clean merges, one per file only for a file that clashes
 	let everyone: Promise<Author> | null = null;
 	const sinceLastSync = (): Promise<Author> => {
-		if (!everyone) everyone = describeRemote(remote, state.commit, head);
+		if (!everyone) everyone = describeRemote(remote, state.commit, head, remoteName(options));
 		return everyone;
 	};
 	const authors = new Map<string, Promise<Author>>();
@@ -603,7 +611,7 @@ async function applyIncoming(
 				(commit) =>
 					commit
 						? {
-								name: deviceFromMessage(commit.message) ?? "GitHub",
+								name: deviceFromMessage(commit.message) ?? remoteName(options),
 								time: commit.authored ?? commit.date,
 							}
 						: sinceLastSync(),
@@ -864,7 +872,7 @@ async function applyIncoming(
 		const missing = pulls.find((a) => !arrived.has(a.sha));
 		if (missing) {
 			const path = missing.kind === "pull-renamed" ? missing.from : missing.path;
-			throw new Error(`Could not download ${path} from GitHub.`);
+			throw new Error(`Could not download ${path} from ${remoteName(options)}.`);
 		}
 	}
 	return { outgoing, deferred, touched, kept };
@@ -908,7 +916,12 @@ function keptCommit(kept: KeptVersions, device: string): KeptCommit {
 	};
 }
 
-async function describeRemote(remote: Remote, base: string | null, head: string): Promise<Author> {
+async function describeRemote(
+	remote: Remote,
+	base: string | null,
+	head: string,
+	where: string,
+): Promise<Author> {
 	let commits: Awaited<ReturnType<Remote["commitsSince"]>> = [];
 	try {
 		commits = await remote.commitsSince(base, head);
@@ -916,10 +929,14 @@ async function describeRemote(remote: Remote, base: string | null, head: string)
 		// labels are a nicety, a failed lookup must not fail the sync
 	}
 	commits = commits.filter((c) => !isSuperseded(c.message));
-	const devices = unique(commits.map((c) => deviceFromMessage(c.message) ?? "GitHub"));
-	const name = devices.length === 0 ? "GitHub" : devices.slice(0, 2).join(", ");
+	const devices = unique(commits.map((c) => deviceFromMessage(c.message) ?? where));
+	const name = devices.length === 0 ? where : devices.slice(0, 2).join(", ");
 	const newest = commits[0];
 	return { name, time: newest ? (newest.authored ?? newest.date) : null };
+}
+
+function remoteName(options: SyncOptions): string {
+	return options.remoteName ?? "GitHub";
 }
 
 function modesOf(files: Map<string, RemoteFile>): Record<string, string> {
