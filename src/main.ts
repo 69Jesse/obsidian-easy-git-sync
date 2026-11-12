@@ -10,13 +10,15 @@ import {
 	TFile,
 } from "obsidian";
 import { conflictEditorExtension } from "./editor";
+import { toArrayBuffer } from "./lib/bytes";
 import { ObsidianFs } from "./local-fs";
 import { GitLockstep } from "./lockstep";
 import { hasConflictMarker, resolveAllNewer } from "./merge/conflict";
 import { ConflictsModal, chooseFirstSync, confirm, pickBranch } from "./modals";
 import { conflictPostProcessor } from "./reading";
-import { GitHubClient, GitHubError, GitHubRemote } from "./remote/github";
-import { type Http, OfflineError } from "./remote/http";
+import type { BlobStash } from "./remote/git-remote";
+import { type Connection, createHost, type Host } from "./remote/hosts";
+import { type Http, OfflineError, RemoteError } from "./remote/http";
 import {
 	type DeviceSettings,
 	defaultDeviceName,
@@ -36,9 +38,11 @@ import { emptyState, type SyncState } from "./sync/types";
 
 const TOKEN_SECRET = "easy-git-sync-token";
 const DEVICE_KEY = "easy-git-sync-device";
-// a full scan even when GitHub has nothing new, to catch edits in the config folder
+// a full scan even when the remote has nothing new, to catch edits in the config folder
 const FULL_SYNC_EVERY = 10 * 60_000;
 const OWN_WRITE_ECHO = 5_000;
+const EXPIRY_WARNING = 14 * 24 * 60 * 60_000;
+const EXPIRY_CHECK_EVERY = 24 * 60 * 60_000;
 
 type Status =
 	| { kind: "setup"; text: string }
@@ -80,8 +84,9 @@ const obsidianHttp: Http = async (request) => {
 export default class EasyGitSync extends Plugin {
 	override settings!: EasyGitSyncSettings;
 	device!: DeviceSettings;
-	client!: GitHubClient;
+	private hostCache: { key: string; host: Host } | null = null;
 	private fs!: ObsidianFs;
+	private expiryChecked = 0;
 	private state: SyncState | null = null;
 
 	private running: Promise<void> | null = null;
@@ -111,11 +116,6 @@ export default class EasyGitSync extends Plugin {
 		await this.loadSettings();
 		this.loadDevice();
 		this.fs = new ObsidianFs(this.app);
-		this.client = new GitHubClient(
-			obsidianHttp,
-			() => this.token(),
-			(ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
-		);
 
 		this.addSettingTab(new EasyGitSyncSettingTab(this.app, this));
 		this.registerEditorExtension(conflictEditorExtension());
@@ -126,7 +126,7 @@ export default class EasyGitSync extends Plugin {
 		this.registerDomEvent(this.statusEl, "click", (event) => this.showMenu(event));
 		this.ribbonEl = this.addRibbonIcon(
 			"refresh-cw",
-			"Sync with GitHub",
+			`Sync with ${this.host.name}`,
 			() => void this.syncNow("manual"),
 		);
 		this.ribbonEl.addClass("easy-git-sync-ribbon");
@@ -146,18 +146,16 @@ export default class EasyGitSync extends Plugin {
 			name: "Resolve all sync conflicts with the newer version",
 			callback: () => void this.resolveAllNewer(),
 		});
+		// the id dates from when GitHub was the only host, and hotkeys are bound to it
 		this.addCommand({
 			id: "open-on-github",
-			name: "Open this note on GitHub",
+			name: "Open this note on the web",
 			checkCallback: (checking) => {
 				const file = this.app.workspace.getActiveFile();
 				if (!file || !this.device.repo) return false;
-				if (!checking) {
-					const path = file.path.split("/").map(encodeURIComponent).join("/");
-					window.open(
-						`https://github.com/${this.device.repo}/blob/${encodeURIComponent(this.device.branch)}/${path}`,
-					);
-				}
+				const url = this.host.fileUrl(this.device.repo, this.device.branch, file.path);
+				if (!url) return false;
+				if (!checking) window.open(url);
 				return true;
 			},
 		});
@@ -199,6 +197,9 @@ export default class EasyGitSync extends Plugin {
 	private loadDevice(): void {
 		const saved = this.app.loadLocalStorage(DEVICE_KEY) as Partial<DeviceSettings> | null;
 		this.device = {
+			provider: "github",
+			server: "",
+			username: "",
 			repo: null,
 			branch: "main",
 			deviceName: defaultDeviceName(),
@@ -207,28 +208,81 @@ export default class EasyGitSync extends Plugin {
 		};
 	}
 
+	get connection(): Connection {
+		return {
+			provider: this.device.provider,
+			server: this.device.server,
+			username: this.device.username,
+		};
+	}
+
+	get host(): Host {
+		const key = JSON.stringify(this.connection);
+		if (this.hostCache?.key !== key) {
+			this.hostCache = {
+				key,
+				host: createHost(this.connection, {
+					http: obsidianHttp,
+					token: () => this.token(),
+					sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+				}),
+			};
+		}
+		return this.hostCache.host;
+	}
+
+	// "the server" starts a sentence as "The server"
+	get hostName(): string {
+		const name = this.host.name;
+		return name.charAt(0).toUpperCase() + name.slice(1);
+	}
+
+	async setConnection(connection: Partial<Connection>): Promise<void> {
+		const next = { ...this.connection, ...connection };
+		if (JSON.stringify(next) === JSON.stringify(this.connection)) return;
+		const { firstSync: _, ...device } = this.device;
+		this.device = { ...device, ...next, repo: null, branch: "main", started: false };
+		this.saveDevice();
+		this.state = emptyState(this.target);
+		await this.saveState();
+		this.lockstep = undefined;
+		this.blocked = null;
+		this.reschedule();
+		this.render();
+	}
+
 	saveDevice(): void {
 		this.app.saveLocalStorage(DEVICE_KEY, this.device);
 	}
 
-	// per vault, in case the keychain is shared: two vaults must not overwrite each other's token
+	// per vault, in case the keychain is shared: two vaults must not overwrite each other's token;
+	// and per provider and server, so switching back finds the token that was there
 	private get tokenId(): string {
 		const appId = (this.app as unknown as { appId?: string }).appId;
-		const suffix = (appId ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-		return suffix ? `${TOKEN_SECRET}-${suffix}` : TOKEN_SECRET;
+		const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+		const suffix = slug(appId ?? "");
+		const base = suffix ? `${TOKEN_SECRET}-${suffix}` : TOKEN_SECRET;
+		const { provider, server, username } = this.device;
+		if (provider === "github") return base;
+		const where = provider === "other" ? `${server}${username}` : server;
+		return `${base}-${provider}${where ? `-${slug(where)}` : ""}`;
 	}
 
 	token(): string | null {
 		return this.app.secretStorage.getSecret(this.tokenId) || null;
 	}
 
+	// another git server may take a login without a password
 	hasToken(): boolean {
-		return this.token() !== null;
+		return (
+			this.token() !== null || (this.device.provider === "other" && this.device.username !== "")
+		);
 	}
 
 	setToken(token: string): void {
 		this.app.secretStorage.setSecret(this.tokenId, token);
 		this.blocked = null;
+		this.expiryChecked = 0;
 		this.render();
 	}
 
@@ -237,24 +291,51 @@ export default class EasyGitSync extends Plugin {
 		return plugins?.enabledPlugins?.has("obsidian-git") ?? false;
 	}
 
-	remote(): GitHubRemote | null {
+	remote() {
 		return this.device.repo
-			? new GitHubRemote(
-					this.client,
+			? this.host.remote(
 					this.device.repo,
 					this.device.branch,
 					this.settings.commitAsAccount,
+					this.keptStash(),
 				)
 			: null;
 	}
 
+	// GitHub's targets keep their old form, so an existing state stays valid
 	private get target(): string {
-		return `${this.device.repo}@${this.device.branch}`;
+		const { provider, server, repo, branch } = this.device;
+		if (provider === "github") return `${repo}@${branch}`;
+		const where = provider === "other" ? "" : `${server.replace(/^https?:\/\//, "")}/`;
+		return `${provider}:${where}${repo}@${branch}`;
+	}
+
+	private get pluginDir(): string {
+		return this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+	}
+
+	// this device's losing versions, kept on disk until a commit has taken them up
+	private keptStash(): BlobStash {
+		const adapter = this.app.vault.adapter;
+		const dir = `${this.pluginDir}/kept`;
+		return {
+			get: async (sha) => {
+				const path = `${dir}/${sha}`;
+				return (await adapter.exists(path)) ? new Uint8Array(await adapter.readBinary(path)) : null;
+			},
+			put: async (sha, bytes) => {
+				if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+				await adapter.writeBinary(`${dir}/${sha}`, toArrayBuffer(bytes));
+			},
+			delete: async (sha) => {
+				const path = `${dir}/${sha}`;
+				if (await adapter.exists(path)) await adapter.remove(path);
+			},
+		};
 	}
 
 	private get stateFile(): string {
-		const dir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
-		return `${dir}/state.json`;
+		return `${this.pluginDir}/state.json`;
 	}
 
 	private ready(): boolean {
@@ -268,23 +349,21 @@ export default class EasyGitSync extends Plugin {
 	}
 
 	async selectRepo(fullName: string): Promise<void> {
-		let repo: Awaited<ReturnType<GitHubClient["repo"]>>;
+		const host = this.host;
+		let repo: Awaited<ReturnType<Host["repo"]>>;
 		try {
-			repo = await this.client.repo(fullName);
+			repo = await host.repo(fullName);
 		} catch (error) {
 			new Notice(`Easy Git Sync: could not open ${fullName}. ${describe(error)}`);
 			return;
 		}
 		if (!repo.canPush) {
-			new Notice(
-				`Easy Git Sync: the token can read ${repo.fullName} but not write to it. Give it "Contents: Read and write" for this repository.`,
-				10_000,
-			);
+			new Notice(`Easy Git Sync: ${readOnly(host.id, repo.fullName)}`, 10_000);
 			return;
 		}
 		let branch = repo.defaultBranch;
 		if (!repo.empty) {
-			const branches = await this.client
+			const branches = await host
 				.branches(repo.fullName, repo.defaultBranch)
 				.catch(() => [repo.defaultBranch]);
 			if (branches.length > 1) {
@@ -315,7 +394,7 @@ export default class EasyGitSync extends Plugin {
 			new Notice("Easy Git Sync: turn off the Git plugin on this device first.");
 			return;
 		}
-		this.setStatus({ kind: "syncing", text: "Comparing with GitHub" });
+		this.setStatus({ kind: "syncing", text: `Comparing with ${this.host.name}` });
 		let summary: Awaited<ReturnType<typeof preview>>;
 		try {
 			summary = await preview(await this.loadState(), this.syncOptions(false));
@@ -325,8 +404,8 @@ export default class EasyGitSync extends Plugin {
 			return;
 		}
 		this.setStatus({ kind: "idle" });
-		const repo = this.device.repo ?? "";
-		// asked only when both sides have notes that differ: a fresh phone never offers to wipe GitHub
+		const repo = this.repoLabel;
+		// asked only when both sides have notes that differ: a fresh phone never offers to wipe the remote
 		const hereOnly = summary.upload;
 		const thereOnly = summary.download;
 		const { notes } = summary;
@@ -334,6 +413,7 @@ export default class EasyGitSync extends Plugin {
 		if (!summary.emptyRemote && notes.here > 0 && notes.there > 0 && notes.differ > 0) {
 			const chosen = await chooseFirstSync(this.app, {
 				repo,
+				remote: this.host.name,
 				same: summary.same,
 				upload: hereOnly,
 				download: thereOnly,
@@ -344,13 +424,20 @@ export default class EasyGitSync extends Plugin {
 			firstSync = chosen;
 		} else {
 			const lines = summary.emptyRemote
-				? [`${repo} is empty. This vault becomes its first commit: ${summary.upload} files.`]
+				? [
+						`${this.repoLabel} is empty. This vault becomes its first commit: ${summary.upload} files.`,
+					]
 				: [
 						`Already the same on both sides: ${summary.same} files.`,
 						`Only in this vault, to upload: ${summary.upload}.`,
-						`Only on GitHub, to download: ${summary.download}.`,
+						`Only on ${this.host.name}, to download: ${summary.download}.`,
 					];
-			const ok = await confirm(this.app, `Start syncing with ${repo}?`, lines, "Start syncing");
+			const ok = await confirm(
+				this.app,
+				`Start syncing with ${this.repoLabel}?`,
+				lines,
+				"Start syncing",
+			);
 			if (!ok) return;
 		}
 		this.device.started = true;
@@ -360,9 +447,23 @@ export default class EasyGitSync extends Plugin {
 		await this.syncNow("manual");
 	}
 
+	// a URL reads long in a sentence, so another git server is named by its path
+	get repoLabel(): string {
+		const repo = this.device.repo ?? "";
+		if (this.device.provider !== "other") return repo;
+		try {
+			return new URL(repo).pathname.replace(/^\/+|\.git$/g, "") || repo;
+		} catch {
+			return repo;
+		}
+	}
+
 	async disconnect(): Promise<void> {
 		this.app.secretStorage.setSecret(this.tokenId, "");
 		this.device = {
+			provider: this.device.provider,
+			server: this.device.server,
+			username: this.device.username,
 			repo: null,
 			branch: "main",
 			deviceName: this.device.deviceName,
@@ -485,6 +586,7 @@ export default class EasyGitSync extends Plugin {
 			configDir: this.app.vault.configDir,
 			allowMassDelete,
 			conflicts: this.settings.conflicts,
+			remoteName: this.host.name,
 			...(this.device.firstSync ? { firstSync: this.device.firstSync } : {}),
 			saveState: async (state) => {
 				this.state = state;
@@ -543,6 +645,7 @@ export default class EasyGitSync extends Plugin {
 			await this.recheckConflicts();
 			this.setStatus({ kind: "idle" });
 			this.announce(result.report, reason === "manual" || this.progressNotice !== null, first);
+			void this.warnOfExpiry();
 		} catch (error) {
 			this.dirty = true;
 			this.handleError(error, reason === "manual");
@@ -569,9 +672,9 @@ export default class EasyGitSync extends Plugin {
 			this.lockstep = base
 				? await GitLockstep.detect(
 						base,
-						this.device.repo,
+						this.host.cloneUrl(this.device.repo),
 						this.device.branch,
-						() => this.token(),
+						() => this.host.gitLogin(),
 						this.stateFile,
 					)
 				: null;
@@ -582,7 +685,7 @@ export default class EasyGitSync extends Plugin {
 	private async confirmMassDelete(error: MassDeleteError): Promise<void> {
 		const where = [
 			error.here > 0 ? `${error.here} files in this vault` : null,
-			error.there > 0 ? `${error.there} files on GitHub` : null,
+			error.there > 0 ? `${error.there} files on ${this.host.name}` : null,
 		]
 			.filter(Boolean)
 			.join(" and ");
@@ -591,7 +694,7 @@ export default class EasyGitSync extends Plugin {
 			"Delete most of the vault?",
 			[
 				`This sync would delete ${where}. That is usually a vault that did not finish loading, a moved folder, or an emptied repository, not something done on purpose.`,
-				"Nothing is deleted until you confirm. Deleted files stay in GitHub's history either way.",
+				`Nothing is deleted until you confirm. Deleted files stay in ${this.host.name}'s history either way.`,
 			],
 			"Delete them",
 			true,
@@ -606,7 +709,7 @@ export default class EasyGitSync extends Plugin {
 		if (error instanceof OfflineError) {
 			this.setStatus({ kind: "offline" });
 			if (manual || this.progressNotice) {
-				this.tell("GitHub cannot be reached. Changes sync once it can.", 6_000);
+				this.tell(`${this.hostName} cannot be reached. Changes sync once it can.`, 6_000);
 			}
 			return;
 		}
@@ -618,13 +721,14 @@ export default class EasyGitSync extends Plugin {
 		}
 		const message = describe(error);
 		if (
-			error instanceof GitHubError &&
+			error instanceof RemoteError &&
 			(error.kind === "auth" || error.kind === "not-found" || error.kind === "forbidden")
 		) {
+			const login = this.device.provider === "other" ? "login" : "token";
 			this.blocked =
 				error.kind === "auth"
-					? "GitHub did not accept the token. It may have expired or been revoked: create a new one in the settings."
-					: `${this.device.repo}: ${message} Check that the token still has access to it.`;
+					? `${this.hostName} did not accept the ${login}. It may have expired or been revoked: ${login === "token" ? "create a new one" : "check it"} in the settings.`
+					: `${this.repoLabel}: ${message} Check that the ${login} still has access to it.`;
 			this.setStatus({ kind: "paused", text: this.blocked });
 			if (manual || this.progressNotice || this.lastErrorShown !== this.blocked)
 				this.tell(this.blocked, 15_000);
@@ -704,7 +808,7 @@ export default class EasyGitSync extends Plugin {
 							: `${n.path} (from ${n.from}, in ${n.places} ${n.places === 1 ? "place" : "places"})`,
 					);
 				});
-				f.appendText(". The other version is in GitHub's history.");
+				f.appendText(`. The other version is in ${this.host.name}'s history.`);
 			});
 		}
 		for (const kept of report.keptBoth) {
@@ -742,9 +846,11 @@ export default class EasyGitSync extends Plugin {
 		if (first) {
 			const deleted = [
 				report.deletedHere.length > 0 ? `${report.deletedHere.length} deleted here` : null,
-				report.deletedThere.length > 0 ? `${report.deletedThere.length} deleted on GitHub` : null,
+				report.deletedThere.length > 0
+					? `${report.deletedThere.length} deleted on ${this.host.name}`
+					: null,
 			].filter(Boolean);
-			summary = `in sync with ${this.device.repo}: ${report.pulled.length} files downloaded, ${report.pushed.length} uploaded, ${report.merged.length} merged${deleted.length > 0 ? `, ${deleted.join(", ")}` : ""}.`;
+			summary = `in sync with ${this.repoLabel}: ${report.pulled.length} files downloaded, ${report.pushed.length} uploaded, ${report.merged.length} merged${deleted.length > 0 ? `, ${deleted.join(", ")}` : ""}.`;
 		} else if (manual) {
 			summary =
 				changed === 0 ? "up to date." : `synced ${changed} ${changed === 1 ? "file" : "files"}.`;
@@ -761,6 +867,23 @@ export default class EasyGitSync extends Plugin {
 				line(f);
 			});
 		}, duration);
+	}
+
+	// once a day at most, and once per expiry date: a token that runs out stops every sync
+	private async warnOfExpiry(): Promise<void> {
+		if (Date.now() - this.expiryChecked < EXPIRY_CHECK_EVERY) return;
+		this.expiryChecked = Date.now();
+		const expiry = await this.host.tokenExpiry().catch(() => null);
+		if (!expiry || expiry.getTime() - Date.now() > EXPIRY_WARNING) return;
+		const day = expiry.toISOString().slice(0, 10);
+		if (this.device.expiryWarned === day) return;
+		this.device.expiryWarned = day;
+		this.saveDevice();
+		const when = expiry.getTime() < Date.now() ? "expired on" : "expires on";
+		new Notice(
+			`Easy Git Sync: the ${this.host.name} token ${when} ${expiry.toLocaleDateString()}. Create a new one in the settings to keep syncing.`,
+			15_000,
+		);
 	}
 
 	private async recheckConflicts(): Promise<void> {
@@ -812,7 +935,7 @@ export default class EasyGitSync extends Plugin {
 		}
 		const notes = `${plan.length} ${plan.length === 1 ? "note" : "notes"}`;
 		const body = [
-			`${resolvable} ${resolvable === 1 ? "conflict" : "conflicts"} in ${notes} will keep the version that was edited last. Both versions are already in GitHub's history.`,
+			`${resolvable} ${resolvable === 1 ? "conflict" : "conflicts"} in ${notes} will keep the version that was edited last. Both versions are already in ${this.host.name}'s history.`,
 		];
 		if (undecided > 0) {
 			body.push(
@@ -911,7 +1034,11 @@ export default class EasyGitSync extends Plugin {
 	private notReadyReason(): string {
 		if (this.otherGitPluginEnabled())
 			return "paused while the Git plugin is turned on in this vault.";
-		if (!this.hasToken()) return "add a GitHub token in the settings to start.";
+		if (this.device.provider === "other") {
+			if (!this.device.repo) return "enter the repository's address in the settings to start.";
+			if (!this.hasToken()) return "enter the login for the repository in the settings to start.";
+		}
+		if (!this.hasToken()) return `add a ${this.host.name} token in the settings to start.`;
 		if (!this.device.repo) return "choose a repository in the settings to start.";
 		if (!this.device.started) return 'press "Start syncing" in the settings.';
 		return this.blocked ?? "not ready.";
@@ -930,7 +1057,7 @@ export default class EasyGitSync extends Plugin {
 			case "syncing":
 				return `${s.text}...`;
 			case "offline":
-				return `GitHub cannot be reached. Changes sync once it can.${suffix}`;
+				return `${this.hostName} cannot be reached. Changes sync once it can.${suffix}`;
 			case "error":
 			case "paused":
 			case "setup":
@@ -978,7 +1105,10 @@ export default class EasyGitSync extends Plugin {
 			this.ribbonEl.toggleClass("is-syncing", s.kind === "syncing");
 			this.ribbonEl.toggleClass("has-problem", s.kind === "error" || this.blocked !== null);
 			this.ribbonEl.toggleClass("has-conflicts", conflicts > 0);
-			this.ribbonEl.setAttr("aria-label", `Sync with GitHub. ${this.statusDescription()}`);
+			this.ribbonEl.setAttr(
+				"aria-label",
+				`Sync with ${this.host.name}. ${this.statusDescription()}`,
+			);
 		}
 	}
 
@@ -1019,6 +1149,21 @@ export default class EasyGitSync extends Plugin {
 				}),
 		);
 		menu.showAtMouseEvent(event);
+	}
+}
+
+function readOnly(provider: Host["id"], repo: string): string {
+	switch (provider) {
+		case "github":
+			return `the token can read ${repo} but not write to it. Give it "Contents: Read and write" for this repository.`;
+		case "gitlab":
+			return `the token can read ${repo} but not write to it. It needs the write_repository scope, and you need the Developer role or higher on the project.`;
+		case "bitbucket":
+			return `the token can read ${repo} but not write to it. It needs the write:repository scope, and you need write access to the repository.`;
+		case "forgejo":
+			return `the token can read ${repo} but not write to it. Give it "Read and write" on repository, and check that you can push to it.`;
+		case "other":
+			return `the login can read ${repo} but not write to it.`;
 	}
 }
 

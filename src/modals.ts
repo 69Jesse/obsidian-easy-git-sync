@@ -1,10 +1,10 @@
 import { type App, Modal, Setting, SuggestModal } from "obsidian";
 import type EasyGitSync from "./main";
-import type { GitHubRepo } from "./remote/github";
+import type { RepoInfo } from "./remote/hosts";
 import type { FirstSync } from "./sync/engine";
 
-export class RepoPickerModal extends SuggestModal<GitHubRepo | string> {
-	private repos: GitHubRepo[] = [];
+export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
+	private repos: RepoInfo[] = [];
 	private loaded = false;
 
 	constructor(
@@ -19,7 +19,7 @@ export class RepoPickerModal extends SuggestModal<GitHubRepo | string> {
 
 	override onOpen(): void {
 		void super.onOpen();
-		void this.plugin.client.repos().then(
+		void this.plugin.host.repos().then(
 			(repos) => {
 				this.repos = repos.filter((repo) => repo.canPush);
 				this.loaded = true;
@@ -34,17 +34,18 @@ export class RepoPickerModal extends SuggestModal<GitHubRepo | string> {
 		);
 	}
 
-	getSuggestions(query: string): Array<GitHubRepo | string> {
+	getSuggestions(query: string): Array<RepoInfo | string> {
 		const q = query.trim().toLowerCase();
 		const matches = this.repos.filter((repo) => repo.fullName.toLowerCase().includes(q));
-		const typed = /^[\w.-]+\/[\w.-]+$/.test(query.trim()) ? query.trim() : null;
+		// GitLab nests groups, so a full name can have more than two parts
+		const typed = /^[\w.-]+(\/[\w.-]+)+$/.test(query.trim()) ? query.trim() : null;
 		if (typed && !matches.some((repo) => repo.fullName.toLowerCase() === typed.toLowerCase())) {
 			return [...matches, typed];
 		}
 		return this.loaded || matches.length > 0 ? matches : [];
 	}
 
-	renderSuggestion(item: GitHubRepo | string, el: HTMLElement): void {
+	renderSuggestion(item: RepoInfo | string, el: HTMLElement): void {
 		if (typeof item === "string") {
 			el.createDiv({ text: item });
 			el.createEl("small", { text: "Use this repository", cls: "easy-git-sync-muted" });
@@ -57,7 +58,7 @@ export class RepoPickerModal extends SuggestModal<GitHubRepo | string> {
 		el.createEl("small", { text: details.join(", "), cls: "easy-git-sync-muted" });
 	}
 
-	onChooseSuggestion(item: GitHubRepo | string): void {
+	onChooseSuggestion(item: RepoInfo | string): void {
 		void this.onPick(typeof item === "string" ? item : item.fullName);
 	}
 }
@@ -132,6 +133,8 @@ export function confirm(
 
 export interface FirstSyncSummary {
 	repo: string;
+	// GitHub, GitLab, or "the server"
+	remote: string;
 	same: number;
 	upload: number;
 	download: number;
@@ -148,7 +151,7 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 				this.setTitle(`Start syncing with ${s.repo}`);
 				this.modalEl.addClass("easy-git-sync-modal");
 				this.contentEl.createEl("p", {
-					text: `Both have files. ${files(s.same)} are the same on both sides, ${files(s.upload)} only in this vault, ${files(s.download)} only on GitHub, and ${files(s.merge)} differ.`,
+					text: `Both have files. ${files(s.same)} are the same on both sides, ${files(s.upload)} only in this vault, ${files(s.download)} only on ${s.remote}, and ${files(s.merge)} differ.`,
 				});
 				const choice = (name: string, desc: string, action: string, value: FirstSync) => {
 					const setting = new Setting(this.contentEl).setName(name).setDesc(desc);
@@ -176,23 +179,23 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 						: "";
 				choice(
 					"Merge",
-					`Keep everything from both: files only on one side are copied to the other. A file here that is an older version from GitHub's history just updates.${differ}`,
+					`Keep everything from both: files only on one side are copied to the other. A file here that is an older version from ${s.remote}'s history just updates.${differ}`,
 					"Merge",
 					"merge",
 				);
 				const here = changes(s.merge, s.upload, "here");
 				choice(
-					"Use GitHub's version",
+					`Use ${s.remote}'s version`,
 					here
-						? `Make this vault a copy of GitHub's: ${here}. ${s.merge > 0 && s.upload > 0 ? "Both go" : s.merge + s.upload === 1 ? "It goes" : "They go"} to the trash.`
-						: "Make this vault a copy of GitHub's.",
-					"Use GitHub's",
+						? `Make this vault a copy of ${s.remote}'s: ${here}. ${s.merge > 0 && s.upload > 0 ? "Both go" : s.merge + s.upload === 1 ? "It goes" : "They go"} to the trash.`
+						: `Make this vault a copy of ${s.remote}'s.`,
+					`Use ${s.remote}'s`,
 					"use-remote",
 				);
 				const there = changes(s.merge, s.download, "there");
 				choice(
 					"Use this vault",
-					`Make GitHub's a copy of this vault${there ? `: ${there},` : ","} in one commit. GitHub's history keeps the old versions.`,
+					`Make ${s.remote}'s a copy of this vault${there ? `: ${there},` : ","} in one commit. ${capitalize(s.remote)}'s history keeps the old versions.`,
 					"Use this vault",
 					"use-local",
 				);
@@ -229,4 +232,8 @@ export class ConflictsModal extends SuggestModal<string> {
 	onChooseSuggestion(path: string): void {
 		this.onPick(path);
 	}
+}
+
+function capitalize(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
 }

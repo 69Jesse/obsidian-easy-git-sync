@@ -8,6 +8,13 @@ import {
 } from "obsidian";
 import type EasyGitSync from "./main";
 import { RepoPickerModal } from "./modals";
+import {
+	DEFAULT_SERVERS,
+	type Host,
+	normalizeServer,
+	PROVIDERS,
+	type ProviderId,
+} from "./remote/hosts";
 import type { ConflictStrategy, FirstSync } from "./sync/engine";
 
 // in data.json, so the same on every device: a clash must settle alike wherever it is synced
@@ -43,12 +50,20 @@ export const DEFAULT_SETTINGS: EasyGitSyncSettings = {
 
 // in local storage, not data.json: a fresh phone needs these before it has synced anything
 export interface DeviceSettings {
+	provider: ProviderId;
+	// GitLab's or Forgejo's server; empty for the default one
+	server: string;
+	// another git server only
+	username: string;
+	// the full name, or for another git server its URL
 	repo: string | null;
 	branch: string;
 	deviceName: string;
 	started: boolean;
 	// kept until a sync completes, so a retried first sync does not turn into a merge
 	firstSync?: FirstSync;
+	// the expiry date last warned about, so the warning shows once
+	expiryWarned?: string;
 }
 
 export function defaultDeviceName(): string {
@@ -85,14 +100,65 @@ const CHECK_INTERVAL: [string, string][] = [
 	["0", "Only when I ask"],
 ];
 
-export const TOKEN_URL =
-	"https://github.com/settings/personal-access-tokens/new?" +
-	new URLSearchParams({
-		name: "Obsidian Easy Git Sync",
-		description: "Lets Obsidian sync this vault with its repository.",
-		contents: "write",
-		expires_in: "none",
-	}).toString();
+// text and code alternate: every second part is a name exactly as that host's token form shows it
+const TOKEN_HELP: Record<Exclude<ProviderId, "other">, string[]> = {
+	github: [
+		"A fine-grained token with the ",
+		"Read and write",
+		" permission on ",
+		"Contents",
+		", under ",
+		"Repositories",
+		". The button opens GitHub's form with this already filled in.",
+	],
+	gitlab: [
+		"A personal access token with the scopes ",
+		"read_api",
+		" and ",
+		"write_repository",
+		". The button opens GitLab's form with these already filled in.",
+	],
+	bitbucket: [
+		"An API token with scopes, for the Bitbucket app: ",
+		"read:user:bitbucket",
+		", ",
+		"read:workspace:bitbucket",
+		", ",
+		"read:repository:bitbucket",
+		" and ",
+		"write:repository:bitbucket",
+		". The button opens Atlassian's token page: choose ",
+		"Create API token with scopes",
+		".",
+	],
+	forgejo: [
+		"An access token with ",
+		"Read and write",
+		" on ",
+		"repository",
+		" and ",
+		"Read",
+		" on ",
+		"user",
+		". The button opens the server's token form, filled in where the server allows it.",
+	],
+};
+
+const TOKEN_PLACEHOLDER: Record<ProviderId, string> = {
+	github: "github_pat_...",
+	gitlab: "glpat-...",
+	bitbucket: "ATATT...",
+	forgejo: "",
+	other: "",
+};
+
+const LINK_HELP: Partial<Record<ProviderId, string>> = {
+	github: "Turn this off to keep syncs off your contribution graph.",
+	gitlab:
+		"Commits use your private GitLab commit address. Turn this off to keep syncs off your activity.",
+	forgejo:
+		"Commits use your account's no-reply address. Turn this off to keep syncs off your activity.",
+};
 
 export class EasyGitSyncSettingTab extends PluginSettingTab {
 	private accountLine: HTMLElement | null = null;
@@ -119,73 +185,73 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			);
 		}
 
-		new Setting(containerEl).setName("GitHub").setHeading();
+		new Setting(containerEl).setName("Provider").setHeading();
 
-		const tokenSetting = new Setting(containerEl)
-			.setName("Access token")
+		const device = plugin.device;
+		const host = plugin.host;
+		new Setting(containerEl)
+			.setName("Provider")
 			.setDesc(
-				createFragment((desc) => {
-					// named exactly as GitHub's token form names them
-					desc.appendText("A fine-grained token with the ");
-					desc.createEl("code", { text: "Read and write" });
-					desc.appendText(" permission on ");
-					desc.createEl("code", { text: "Contents" });
-					desc.appendText(", under ");
-					desc.createEl("code", { text: "Repositories" });
-					desc.appendText(". The button opens GitHub's form with this already filled in.");
-				}),
+				"Where the repository is. Changing it starts this device over with a new repository.",
 			)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text.inputEl.autocomplete = "off";
-				text.setPlaceholder("github_pat_...").onChange((value) => {
-					window.clearTimeout(this.tokenTimer);
-					this.tokenTimer = window.setTimeout(() => {
-						const token = value.trim();
-						if (!token) return;
-						plugin.setToken(token);
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions(PROVIDERS)
+					.setValue(device.provider)
+					.onChange(async (value) => {
+						await plugin.setConnection({
+							provider: value as ProviderId,
+							server: "",
+							username: "",
+						});
 						this.display();
-					}, 600);
+					}),
+			);
+
+		if (device.provider === "gitlab" || device.provider === "forgejo") {
+			const fallback = DEFAULT_SERVERS[device.provider] ?? "";
+			new Setting(containerEl)
+				.setName("Server")
+				.setDesc(
+					device.provider === "gitlab"
+						? "Empty for gitlab.com, or the address of your own GitLab."
+						: "Empty for codeberg.org, or the address of your Forgejo or Gitea server.",
+				)
+				.addText((text) => {
+					text.setPlaceholder(fallback.replace(/^https:\/\//, "")).setValue(device.server);
+					// applied once the field is left: each change starts the device over
+					text.inputEl.addEventListener("change", () => {
+						const value = text.getValue().trim();
+						const server =
+							value && normalizeServer(value) !== fallback ? normalizeServer(value) : "";
+						void plugin.setConnection({ server }).then(() => this.display());
+					});
 				});
-			})
-			.addButton((button) =>
-				button.setButtonText("Create token on GitHub").onClick(() => {
-					window.open(TOKEN_URL);
-				}),
-			);
-		// whether a token is saved goes in the description: a placeholder vanishes on paste
-		tokenSetting.settingEl.addClass("easy-git-sync-token-setting");
-		this.accountLine = tokenSetting.descEl.createDiv({ cls: "easy-git-sync-account" });
-		void this.checkAccount();
+		}
 
-		const repoSetting = new Setting(containerEl)
-			.setName("Repository")
-			.setDesc(
-				plugin.device.repo
-					? `${plugin.device.repo}, branch ${plugin.device.branch}.`
-					: "The repository this vault syncs with. It can be empty or already hold the vault.",
-			)
-			.addButton((button) =>
-				button
-					.setButtonText(plugin.device.repo ? "Change" : "Choose")
-					.setDisabled(!plugin.hasToken())
-					.onClick(() => {
-						new RepoPickerModal(this.app, plugin, async (fullName) => {
-							await plugin.selectRepo(fullName);
-							this.display();
-						}).open();
-					}),
-			);
-		if (plugin.device.repo && !plugin.device.started) {
-			repoSetting.addButton((button) =>
-				button
-					.setButtonText("Start syncing")
-					.setCta()
-					.onClick(async () => {
-						await plugin.start();
-						this.display();
-					}),
-			);
+		if (device.provider === "other") {
+			this.displayOther(containerEl);
+		} else {
+			this.displayToken(containerEl, host);
+			const repoSetting = new Setting(containerEl)
+				.setName("Repository")
+				.setDesc(
+					device.repo
+						? `${device.repo}, branch ${device.branch}.`
+						: "The repository this vault syncs with. It can be empty or already hold the vault.",
+				)
+				.addButton((button) =>
+					button
+						.setButtonText(device.repo ? "Change" : "Choose")
+						.setDisabled(!plugin.hasToken())
+						.onClick(() => {
+							new RepoPickerModal(this.app, plugin, async (fullName) => {
+								await plugin.selectRepo(fullName);
+								this.display();
+							}).open();
+						}),
+				);
+			this.addStart(repoSetting);
 		}
 
 		new Setting(containerEl).setName("Syncing").setHeading();
@@ -203,7 +269,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Check GitHub for changes")
+			.setName("Check for changes")
 			.setDesc(
 				"How often to look for changes from other devices. It also looks on startup and when you return to Obsidian.",
 			)
@@ -220,7 +286,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Merge conflicts")
 			.setDesc(
-				"When a note changed in the same place on two devices. Changes in different places always merge, and the version not kept stays in GitHub's history.",
+				`When a note changed in the same place on two devices. Changes in different places always merge, and the version not kept stays in ${host.name}'s history.`,
 			)
 			.addDropdown((dropdown) =>
 				dropdown
@@ -249,15 +315,19 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 				);
 		}
 
-		new Setting(containerEl)
-			.setName("Link commits to your GitHub account")
-			.setDesc("Turn this off to keep syncs off your contribution graph.")
-			.addToggle((toggle) =>
-				toggle.setValue(plugin.settings.commitAsAccount).onChange(async (value) => {
-					plugin.settings.commitAsAccount = value;
-					await plugin.saveSettings();
-				}),
-			);
+		// synced, so it stays put when this device uses a host that cannot link commits
+		const linkHelp = LINK_HELP[host.id];
+		if (host.linksAccounts && linkHelp) {
+			new Setting(containerEl)
+				.setName(`Link commits to your ${host.name} account`)
+				.setDesc(linkHelp)
+				.addToggle((toggle) =>
+					toggle.setValue(plugin.settings.commitAsAccount).onChange(async (value) => {
+						plugin.settings.commitAsAccount = value;
+						await plugin.saveSettings();
+					}),
+				);
+		}
 
 		new Setting(containerEl).setName("This device").setHeading();
 
@@ -283,7 +353,9 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Disconnect this device")
-			.setDesc("Forgets the token, repository and sync history here. Your notes are not touched.")
+			.setDesc(
+				`Forgets the ${device.provider === "other" ? "password" : "token"}, repository and sync history here. Your notes are not touched.`,
+			)
 			.addButton((button) =>
 				button
 					.setButtonText("Disconnect")
@@ -296,6 +368,128 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			);
 	}
 
+	private displayToken(containerEl: HTMLElement, host: Host): void {
+		const plugin = this.plugin;
+		const help = TOKEN_HELP[host.id as Exclude<ProviderId, "other">];
+		const tokenSetting = new Setting(containerEl)
+			.setName("Access token")
+			.setDesc(
+				createFragment((desc) => {
+					help.forEach((part, i) => {
+						if (i % 2 === 1) desc.createEl("code", { text: part });
+						else desc.appendText(part);
+					});
+				}),
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
+				text.setPlaceholder(TOKEN_PLACEHOLDER[host.id]).onChange((value) => {
+					window.clearTimeout(this.tokenTimer);
+					this.tokenTimer = window.setTimeout(() => {
+						const token = value.trim();
+						if (!token) return;
+						plugin.setToken(token);
+						this.display();
+					}, 600);
+				});
+			})
+			.addButton((button) =>
+				button
+					.setButtonText(
+						host.id === "bitbucket" ? "Create token on Atlassian" : `Create token on ${host.name}`,
+					)
+					.onClick(async () => {
+						const url = await host.tokenUrl();
+						if (url) window.open(url);
+					}),
+			);
+		// whether a token is saved goes in the description: a placeholder vanishes on paste
+		tokenSetting.settingEl.addClass("easy-git-sync-token-setting");
+		this.accountLine = tokenSetting.descEl.createDiv({ cls: "easy-git-sync-account" });
+		void this.checkAccount();
+	}
+
+	// another git server: its address and a login, and no account to list repositories from
+	private displayOther(containerEl: HTMLElement): void {
+		const plugin = this.plugin;
+		const device = plugin.device;
+		let url = device.repo ?? "";
+		new Setting(containerEl)
+			.setName("Username")
+			.setDesc("The login for the repository.")
+			.addText((text) => {
+				text.setValue(device.username);
+				text.inputEl.autocomplete = "off";
+				text.inputEl.addEventListener("change", () => {
+					void plugin
+						.setConnection({ username: text.getValue().trim() })
+						.then(() => this.display());
+				});
+			});
+		new Setting(containerEl)
+			.setName("Password")
+			.setDesc(
+				createFragment((desc) => {
+					desc.appendText(
+						"Its password, or an access token if the server issues them. Kept in this device's keychain, never synced.",
+					);
+					this.accountLine = desc.createDiv({ cls: "easy-git-sync-account" });
+					this.accountLine.setText(plugin.token() ? "A password is saved." : "");
+				}),
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
+				text.onChange((value) => {
+					window.clearTimeout(this.tokenTimer);
+					this.tokenTimer = window.setTimeout(() => {
+						if (!value) return;
+						plugin.setToken(value);
+						this.display();
+					}, 600);
+				});
+			});
+		const repoSetting = new Setting(containerEl)
+			.setName("Repository")
+			.setDesc(
+				device.repo
+					? `${device.repo}, branch ${device.branch}.`
+					: "Its address over HTTPS, as you would clone it. SSH addresses cannot work: phones cannot use SSH.",
+			)
+			.addText((text) => {
+				text.setPlaceholder("https://git.example.com/me/vault.git").setValue(url);
+				text.onChange((value) => {
+					url = value.trim();
+				});
+			})
+			.addButton((button) =>
+				button.setButtonText(device.repo ? "Change" : "Connect").onClick(async () => {
+					if (!/^https?:\/\//i.test(url)) {
+						new Notice("Easy Git Sync: enter the repository's address, starting with https://.");
+						return;
+					}
+					await plugin.selectRepo(url);
+					this.display();
+				}),
+			);
+		this.addStart(repoSetting);
+	}
+
+	private addStart(setting: Setting): void {
+		const plugin = this.plugin;
+		if (!plugin.device.repo || plugin.device.started) return;
+		setting.addButton((button) =>
+			button
+				.setButtonText("Start syncing")
+				.setCta()
+				.onClick(async () => {
+					await plugin.start();
+					this.display();
+				}),
+		);
+	}
+
 	private async checkAccount(): Promise<void> {
 		const line = this.accountLine;
 		if (!line) return;
@@ -306,21 +500,26 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		line.setText("Checking the token...");
 		line.removeClass("mod-warning");
 		const id = ++this.checkId;
+		const host = this.plugin.host;
 		try {
-			const [user, repos] = await Promise.all([
-				this.plugin.client.user(),
-				this.plugin.client.repos(),
+			const [account, repos, expiry] = await Promise.all([
+				host.account(),
+				host.repos(),
+				host.tokenExpiry().catch(() => null),
 			]);
 			if (id !== this.checkId) return;
 			// the same count the repository picker shows
 			const count = repos.filter((repo) => repo.canPush).length;
 			if (count === 0) {
-				line.setText(`Connected as @${user.login}, but the token cannot write to any repository.`);
+				line.setText(
+					`Connected as @${account.login}, but the token cannot write to any repository.`,
+				);
 				line.addClass("mod-warning");
 				return;
 			}
+			const until = expiry ? ` The token expires on ${expiry.toLocaleDateString()}.` : "";
 			line.setText(
-				`Connected as @${user.login}. ${count} ${count === 1 ? "repository" : "repositories"} available.`,
+				`Connected as @${account.login}. ${count} ${count === 1 ? "repository" : "repositories"} available.${until}`,
 			);
 		} catch (error) {
 			if (id !== this.checkId) return;
