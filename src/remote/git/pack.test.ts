@@ -48,7 +48,10 @@ describe("packs against git itself", () => {
 			.trim()
 			.split("\n")
 			.map((line) => line.split(" ")[0] ?? "");
-		const pack = git(["pack-objects", "--stdout", "--window=10", "--depth=5"], encodeUtf8(`${list.join("\n")}\n`));
+		const pack = git(
+			["pack-objects", "--stdout", "--window=10", "--depth=5"],
+			encodeUtf8(`${list.join("\n")}\n`),
+		);
 		const objects = await readPack(new Uint8Array(pack));
 		expect(objects.size).toBe(list.length);
 		for (const sha of list) {
