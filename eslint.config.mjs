@@ -19,7 +19,7 @@ export default defineConfig([
 	},
 	{
 		// run by node, never bundled into the plugin
-		files: ["*.mjs", "src/**/*.test.ts", "src/sync/fixtures.ts"],
+		files: ["*.mjs", "src/**/*.test.ts", "src/**/fixtures.ts"],
 		rules: {
 			"no-restricted-globals": "off",
 			"obsidianmd/hardcoded-config-path": "off",

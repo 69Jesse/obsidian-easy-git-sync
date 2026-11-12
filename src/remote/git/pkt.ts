@@ -48,7 +48,7 @@ export class PktReader {
 	// a text line without its newline, or null at a flush or delimiter
 	line(): string | null {
 		const packet = this.next();
-		if (!packet || packet.kind !== "data") return null;
+		if (packet?.kind !== "data") return null;
 		const text = decoder.decode(packet.data);
 		return text.endsWith("\n") ? text.slice(0, -1) : text;
 	}
@@ -64,11 +64,12 @@ export class PktReader {
 		const parts: Uint8Array[] = [];
 		for (;;) {
 			const packet = this.next();
-			if (!packet || packet.kind !== "data") break;
+			if (packet?.kind !== "data") break;
 			const band = packet.data[0];
 			const payload = packet.data.subarray(1);
 			if (band === 1) parts.push(payload);
-			else if (band === 3) throw new Error(`the git server reported: ${decoder.decode(payload).trim()}`);
+			else if (band === 3)
+				throw new Error(`the git server reported: ${decoder.decode(payload).trim()}`);
 		}
 		return concatBytes(parts);
 	}

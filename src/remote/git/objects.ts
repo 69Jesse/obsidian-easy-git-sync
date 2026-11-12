@@ -74,7 +74,10 @@ export function writeTree(entries: readonly TreeEntry[]): Uint8Array {
 		.map((entry) => ({ entry, key: sortKey(entry) }))
 		.sort((a, b) => compareBytes(a.key, b.key));
 	return concatBytes(
-		sorted.flatMap(({ entry }) => [encodeUtf8(`${entry.mode} ${entry.name}\0`), fromHex(entry.sha)]),
+		sorted.flatMap(({ entry }) => [
+			encodeUtf8(`${entry.mode} ${entry.name}\0`),
+			fromHex(entry.sha),
+		]),
 	);
 }
 
