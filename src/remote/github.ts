@@ -48,6 +48,8 @@ interface RequestOptions {
 }
 
 export class GitHubClient {
+	private expiry: { token: string; date: Date | null } | null = null;
+
 	constructor(
 		private readonly http: Http,
 		private readonly token: () => string | null,
@@ -85,6 +87,14 @@ export class GitHubClient {
 			}
 			response = { ...response, headers: lowerCaseHeaders(response.headers) };
 			const { status } = response;
+			if (status < 400) {
+				// sent with every answer to a token that expires, as "2026-11-22 00:00:00 UTC"
+				const expires = response.headers["github-authentication-token-expiration"];
+				this.expiry = {
+					token,
+					date: expires ? new Date(expires.replace(" UTC", "Z").replace(" ", "T")) : null,
+				};
+			}
 			if (status < 400 || options.allow?.includes(status)) return response;
 
 			const wait = retryDelay(response, attempt);
@@ -120,6 +130,12 @@ export class GitHubClient {
 			if (this.account?.user === user) this.account = null;
 		});
 		return user;
+	}
+
+	async tokenExpiry(): Promise<Date | null> {
+		const token = this.token();
+		if (this.expiry?.token !== token) await this.user();
+		return this.expiry?.token === token ? this.expiry.date : null;
 	}
 
 	async repos(): Promise<GitHubRepo[]> {
