@@ -149,6 +149,10 @@ class LiveDevice {
 	}
 }
 
+describe.skipIf(targets.length > 0)("hosts, live", () => {
+	it.skip("needs a token or a server to run against", () => {});
+});
+
 describe.each(targets)("$label, live", { timeout: 120_000 }, (target) => {
 	const host = createHost(target.connection, {
 		http: nodeHttp,
