@@ -1,3 +1,6 @@
+import type { GitAuth } from "./remote/git/smart";
+import { basicAuth } from "./remote/http";
+
 type ExecFile = (
 	file: string,
 	args: string[],
@@ -51,27 +54,27 @@ export class GitLockstep {
 	private constructor(
 		private readonly node: NodeModules,
 		private readonly cwd: string,
-		private readonly fullName: string,
+		private readonly url: string,
 		private readonly branch: string,
-		private readonly token: () => string | null,
+		private readonly login: () => GitAuth | null,
 	) {}
 
 	// another branch checked out is not a reason for null: blocker() has to pause syncing then
 	static async detect(
 		basePath: string,
-		fullName: string,
+		url: string,
 		branch: string,
-		token: () => string | null,
+		login: () => GitAuth | null,
 		stateFile: string,
 	): Promise<GitLockstep | null> {
 		const node = nodeModules();
 		if (!node?.existsSync(node.join(basePath, ".git"))) return null;
-		const lockstep = new GitLockstep(node, basePath, fullName, branch, token);
+		const lockstep = new GitLockstep(node, basePath, url, branch, login);
 		try {
-			const url = (
+			const origin = (
 				await lockstep.git(["config", "--get", "remote.origin.url"]).catch(() => "")
 			).trim();
-			if (url && !sameRepo(url, fullName)) return null;
+			if (origin && !sameRepo(origin, url)) return null;
 			await lockstep.excludeLocally(stateFile).catch(() => undefined);
 			return lockstep;
 		} catch {
@@ -94,7 +97,7 @@ export class GitLockstep {
 		);
 		const tip = ancestor ? head : await this.replay(fetched, head);
 		// a failed push throws, so afterSync is skipped and HEAD keeps the commits for the next sync
-		if (tip !== fetched) await this.git(["push", this.url(), `${tip}:refs/heads/${this.branch}`]);
+		if (tip !== fetched) await this.git(["push", this.url, `${tip}:refs/heads/${this.branch}`]);
 		return head;
 	}
 
@@ -157,7 +160,7 @@ export class GitLockstep {
 	}
 
 	private fetch(): Promise<string> {
-		return this.git(["fetch", "--quiet", "--no-tags", this.url(), `refs/heads/${this.branch}`]);
+		return this.git(["fetch", "--quiet", "--no-tags", this.url, `refs/heads/${this.branch}`]);
 	}
 
 	async blocker(): Promise<string | null> {
@@ -198,10 +201,6 @@ export class GitLockstep {
 		}
 	}
 
-	private url(): string {
-		return `https://github.com/${this.fullName}.git`;
-	}
-
 	private async excludeLocally(stateFile: string): Promise<void> {
 		// --git-path resolves worktrees and a .git file pointing elsewhere
 		const relative = (await this.git(["rev-parse", "--git-path", "info/exclude"])).trim();
@@ -218,7 +217,7 @@ export class GitLockstep {
 	}
 
 	private git(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {
-		const token = this.token();
+		const login = this.login();
 		const env: Record<string, string | undefined> = {
 			...process.env,
 			...extraEnv,
@@ -233,11 +232,10 @@ export class GitLockstep {
 				.join(this.node.delimiter),
 			GIT_TERMINAL_PROMPT: "0",
 		};
-		if (token) {
-			const basic = btoa(`x-access-token:${token}`);
+		if (login) {
 			env.GIT_CONFIG_COUNT = "1";
-			env.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
-			env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${basic}`;
+			env.GIT_CONFIG_KEY_0 = `http.${this.url}.extraheader`;
+			env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: ${basicAuth(login.username, login.password)}`;
 		}
 		return new Promise((resolve, reject) => {
 			this.node.execFile(
@@ -253,10 +251,16 @@ export class GitLockstep {
 	}
 }
 
-function sameRepo(url: string, fullName: string): boolean {
-	const normalized = url
-		.toLowerCase()
-		.replace(/\.git$/, "")
-		.replace(/^git@github\.com:/, "https://github.com/");
-	return normalized.endsWith(`github.com/${fullName.toLowerCase()}`);
+// origin may be the SSH form of the same repository, or carry a login
+export function sameRepo(origin: string, url: string): boolean {
+	const key = (u: string) =>
+		u
+			.trim()
+			.toLowerCase()
+			.replace(/^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\//, "$1/")
+			.replace(/^[^@/:]+@([^/:]+):/, "$1/")
+			.replace(/^https?:\/\/(?:[^@/]+@)?/, "")
+			.replace(/\/+$/, "")
+			.replace(/\.git$/, "");
+	return key(origin) === key(url);
 }

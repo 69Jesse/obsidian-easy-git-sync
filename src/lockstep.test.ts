@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GitLockstep } from "./lockstep";
+import { GitLockstep, sameRepo } from "./lockstep";
 
 // a bare repository stands in for GitHub: `url.insteadOf` sends the plugin's github.com URL to it
 const fullName = "someone/vault";
@@ -54,7 +54,13 @@ describe("git lockstep", () => {
 	};
 
 	const detect = async () => {
-		const lockstep = await GitLockstep.detect(vault, fullName, "main", () => null, stateFile);
+		const lockstep = await GitLockstep.detect(
+			vault,
+			`https://github.com/${fullName}.git`,
+			"main",
+			() => null,
+			stateFile,
+		);
 		if (!lockstep) throw new Error("no lockstep");
 		return lockstep;
 	};
@@ -168,5 +174,23 @@ describe("git lockstep", () => {
 		expect(await lockstep.beforeSync(synced)).toBe(local);
 		expect(run(remote, "log", "-1", "--format=%s", "main")).toBe("mid-sync");
 		expect(run(remote, "rev-parse", "main^")).toBe(synced);
+	});
+});
+
+describe("sameRepo", () => {
+	it("matches a repository however origin spells it", () => {
+		const url = "https://gitlab.com/group/sub/vault.git";
+		for (const origin of [
+			"https://gitlab.com/group/sub/vault.git",
+			"https://gitlab.com/group/sub/vault",
+			"https://jesse@gitlab.com/group/sub/vault.git",
+			"git@gitlab.com:group/sub/vault.git",
+			"ssh://git@gitlab.com:22/group/sub/vault.git",
+			"HTTPS://GitLab.com/Group/Sub/Vault/",
+		]) {
+			expect(sameRepo(origin, url), origin).toBe(true);
+		}
+		expect(sameRepo("https://gitlab.com/group/vault.git", url)).toBe(false);
+		expect(sameRepo("https://github.com/group/sub/vault.git", url)).toBe(false);
 	});
 });

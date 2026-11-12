@@ -64,9 +64,9 @@ describe.skipIf(!token || !repo)("git lockstep, live", () => {
 
 		const lockstep = await GitLockstep.detect(
 			dir,
-			repo ?? "",
+			`https://github.com/${repo ?? ""}.git`,
 			"main",
-			() => token ?? null,
+			() => (token ? { username: "x-access-token", password: token } : null),
 			stateFile,
 		);
 		expect(lockstep).not.toBeNull();
