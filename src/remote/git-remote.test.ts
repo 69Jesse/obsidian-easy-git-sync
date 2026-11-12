@@ -189,6 +189,19 @@ describe.each(setups)("git over HTTP, $label", { timeout: 30_000 }, ({ v2, parti
 		expect(mac.fs.get("old/name.md")).toBeUndefined();
 	});
 
+	it("uploads a file that takes the place of a folder", async () => {
+		const { repo, url } = fresh();
+		const mac = new Device("MacBook", url);
+		mac.fs.set("notes/a.md", "in a folder\n");
+		await mac.sync();
+		mac.fs.delete("notes/a.md");
+		mac.fs.set("notes", "now a file\n");
+		await mac.sync();
+		expect(server.git(repo, ["show", "main:notes"])).toBe("now a file\n");
+		await mac.sync();
+		expect(mac.fs.get("notes")).toBe("now a file\n");
+	});
+
 	it("reruns when another device pushed during the upload", async () => {
 		const { url } = fresh();
 		const mac = new Device("MacBook", url);

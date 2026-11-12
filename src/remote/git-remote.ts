@@ -518,9 +518,9 @@ async function buildTree(
 				? (trees.get(existing.sha) ?? built.get(existing.sha) ?? [])
 				: [];
 		const sha = await buildTree(inner, built, below, trees);
-		// git has no empty folders
-		if (sha === EMPTY_TREE) entries.delete(name);
-		else entries.set(name, { name, mode: TREE_MODE, sha });
+		// git has no empty folders; a file that took the folder's name stays
+		if (sha !== EMPTY_TREE) entries.set(name, { name, mode: TREE_MODE, sha });
+		else if (existing?.mode === TREE_MODE) entries.delete(name);
 	}
 	const list = [...entries.values()];
 	const sha = await hashObject({ type: "tree", data: writeTree(list) });
