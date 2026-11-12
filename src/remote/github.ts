@@ -9,22 +9,21 @@ import type {
 	RemoteFile,
 	RemoteTree,
 } from "../sync/types";
-import { type Http, type HttpResponse, lowerCaseHeaders, OfflineError } from "./http";
+import {
+	type Http,
+	type HttpResponse,
+	lowerCaseHeaders,
+	OfflineError,
+	RemoteError,
+	type RemoteErrorKind,
+} from "./http";
 import { gunzip, untar } from "./tar";
 
 const API = "https://api.github.com";
 
-export type GitHubErrorKind = "auth" | "forbidden" | "not-found" | "rate-limit" | "other";
+export type GitHubErrorKind = RemoteErrorKind;
 
-export class GitHubError extends Error {
-	constructor(
-		readonly status: number,
-		message: string,
-		readonly kind: GitHubErrorKind,
-	) {
-		super(message);
-	}
-}
+export class GitHubError extends RemoteError {}
 
 export interface GitHubUser {
 	id: number;

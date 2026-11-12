@@ -13,9 +13,21 @@ export interface HttpResponse {
 
 export type Http = (request: HttpRequest) => Promise<HttpResponse>;
 
+export type RemoteErrorKind = "auth" | "forbidden" | "not-found" | "rate-limit" | "other";
+
+export class RemoteError extends Error {
+	constructor(
+		readonly status: number,
+		message: string,
+		readonly kind: RemoteErrorKind,
+	) {
+		super(message);
+	}
+}
+
 export class OfflineError extends Error {
-	constructor(cause: unknown) {
-		super(`Could not reach GitHub: ${cause instanceof Error ? cause.message : String(cause)}`);
+	constructor(cause: unknown, where = "GitHub") {
+		super(`Could not reach ${where}: ${cause instanceof Error ? cause.message : String(cause)}`);
 	}
 }
 
@@ -23,4 +35,11 @@ export function lowerCaseHeaders(headers: Record<string, string>): Record<string
 	const out: Record<string, string> = {};
 	for (const [key, value] of Object.entries(headers)) out[key.toLowerCase()] = value;
 	return out;
+}
+
+export function basicAuth(username: string, password: string): string {
+	const bytes = new TextEncoder().encode(`${username}:${password}`);
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return `Basic ${btoa(binary)}`;
 }
