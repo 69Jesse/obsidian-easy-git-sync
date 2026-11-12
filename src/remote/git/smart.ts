@@ -327,10 +327,14 @@ export class GitHttp {
 		if (ad.caps.has("side-band-64k")) reader = new PktReader(reader.sideBand());
 		if (!ad.caps.has("report-status")) return { ok: true };
 		let reason: string | null = null;
+		let updated = false;
 		for (const line of reader.lines()) {
 			if (line.startsWith("unpack ") && line !== "unpack ok") reason = line.slice(7);
 			if (line.startsWith(`ng ${ref} `)) reason = line.slice(ref.length + 4);
+			if (line === `ok ${ref}`) updated = true;
 		}
+		// a cut-off answer is no proof of an update
+		if (reason === null && !updated) reason = "it did not confirm the update";
 		return reason === null ? { ok: true } : { ok: false, reason };
 	}
 }

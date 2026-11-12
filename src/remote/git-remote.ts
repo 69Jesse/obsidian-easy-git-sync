@@ -274,12 +274,14 @@ export class GitRemote implements Remote {
 		);
 		if (!result.ok) {
 			const head = await this.head().catch(() => null);
-			if (head !== input.parent) return "moved";
-			throw new RemoteError(
-				0,
-				`${this.git.name} refused the upload: ${result.reason}.`,
-				"forbidden",
-			);
+			if (head !== sha) {
+				if (head !== input.parent) return "moved";
+				throw new RemoteError(
+					0,
+					`${this.git.name} refused the upload: ${result.reason}.`,
+					"forbidden",
+				);
+			}
 		}
 		for (const [objectSha, object] of objects)
 			if (object.type !== "blob") this.absorb(objectSha, object);
