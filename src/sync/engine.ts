@@ -1,5 +1,6 @@
 import { decodeText } from "../lib/bytes";
 import {
+	capitalize,
 	commitMessage,
 	conflictCopyPath,
 	deviceFromMessage,
@@ -247,7 +248,7 @@ export async function sync(
 		);
 		return { state, report };
 	}
-	throw new Error(`${name} kept changing while syncing. Will try again shortly.`);
+	throw new Error(`${capitalize(name)} kept changing while syncing. Will try again shortly.`);
 }
 
 export interface SyncPreview {

@@ -108,3 +108,8 @@ export function conflictCopyPath(
 	for (let n = 2; exists(candidate); n++) candidate = `${dir}${stem} (${tag} ${n})${ext}`;
 	return candidate;
 }
+
+// "the server" starts a sentence as "The server"
+export function capitalize(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}

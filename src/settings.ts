@@ -319,7 +319,11 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		const linkHelp = LINK_HELP[host.id];
 		if (host.linksAccounts && linkHelp) {
 			new Setting(containerEl)
-				.setName(`Link commits to your ${host.name} account`)
+				.setName(
+					host.name.startsWith("the ")
+						? `Link commits to your account on ${host.name}`
+						: `Link commits to your ${host.name} account`,
+				)
 				.setDesc(linkHelp)
 				.addToggle((toggle) =>
 					toggle.setValue(plugin.settings.commitAsAccount).onChange(async (value) => {

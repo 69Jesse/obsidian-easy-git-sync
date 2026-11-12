@@ -1,3 +1,4 @@
+import { capitalize } from "../lib/format";
 import type { Remote } from "../sync/types";
 import { type GitAuth, GitHttp } from "./git/smart";
 import { type BlobStash, GitRemote, type Identity } from "./git-remote";
@@ -75,6 +76,14 @@ export function normalizeServer(server: string): string {
 function hostOf(url: string): string {
 	try {
 		return new URL(url).host;
+	} catch {
+		return url;
+	}
+}
+
+function hostnameOf(url: string): string {
+	try {
+		return new URL(url).hostname;
 	} catch {
 		return url;
 	}
@@ -209,17 +218,21 @@ abstract class GitHost implements Host {
 				continue;
 			}
 			if (status === 401)
-				throw new RemoteError(status, `${this.name} did not accept the token.`, "auth");
+				throw new RemoteError(status, `${capitalize(this.name)} did not accept the token.`, "auth");
 			if (status === 403)
 				throw new RemoteError(
 					status,
-					`${this.name} refused: the token lacks a permission.`,
+					`${capitalize(this.name)} refused: the token lacks a permission.`,
 					"forbidden",
 				);
 			if (status === 404) throw new RemoteError(status, `Not found on ${this.name}.`, "not-found");
 			if (status === 429)
-				throw new RemoteError(status, `${this.name}'s rate limit was reached.`, "rate-limit");
-			throw new RemoteError(status, `${this.name} answered ${status}.`, "other");
+				throw new RemoteError(
+					status,
+					`${capitalize(this.name)}'s rate limit was reached.`,
+					"rate-limit",
+				);
+			throw new RemoteError(status, `${capitalize(this.name)} answered ${status}.`, "other");
 		}
 	}
 }
@@ -431,7 +444,8 @@ class ForgejoHost extends GitHost {
 
 	// the placeholder address Forgejo and Gitea give an account that hides its own
 	protected override linkedEmail(account: Account): string {
-		return `${account.login.toLowerCase()}@noreply.${hostOf(this.server)}`;
+		// the domain without a port, as Forgejo and Gitea form it
+		return `${account.login.toLowerCase()}@noreply.${hostnameOf(this.server)}`;
 	}
 
 	private toRepo(repo: ForgejoRepo): RepoInfo {

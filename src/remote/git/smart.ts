@@ -1,4 +1,5 @@
 import { concatBytes, toArrayBuffer } from "../../lib/bytes";
+import { capitalize } from "../../lib/format";
 import {
 	basicAuth,
 	type Http,
@@ -116,18 +117,22 @@ export class GitHttp {
 		const { status } = response;
 		const said = decoder.decode(response.body).trim().split("\n")[0]?.slice(0, 200) ?? "";
 		if (status === 401)
-			return new RemoteError(status, `${this.name} did not accept the login.`, "auth");
+			return new RemoteError(status, `${capitalize(this.name)} did not accept the login.`, "auth");
 		if (status === 403)
 			return new RemoteError(
 				status,
-				said || `${this.name} refused access to the repository.`,
+				said || `${capitalize(this.name)} refused access to the repository.`,
 				"forbidden",
 			);
 		if (status === 404)
 			return new RemoteError(status, `The repository was not found on ${this.name}.`, "not-found");
 		if (status === 429)
-			return new RemoteError(status, `${this.name}'s rate limit was reached.`, "rate-limit");
-		return new RemoteError(status, said || `${this.name} answered ${status}.`, "other");
+			return new RemoteError(
+				status,
+				`${capitalize(this.name)}'s rate limit was reached.`,
+				"rate-limit",
+			);
+		return new RemoteError(status, said || `${capitalize(this.name)} answered ${status}.`, "other");
 	}
 
 	private async advertise(service: "git-upload-pack" | "git-receive-pack"): Promise<Advertisement> {

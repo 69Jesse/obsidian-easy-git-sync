@@ -11,6 +11,7 @@ import {
 } from "obsidian";
 import { conflictEditorExtension } from "./editor";
 import { toArrayBuffer } from "./lib/bytes";
+import { capitalize } from "./lib/format";
 import { ObsidianFs } from "./local-fs";
 import { GitLockstep } from "./lockstep";
 import { hasConflictMarker, resolveAllNewer } from "./merge/conflict";
@@ -231,10 +232,14 @@ export default class EasyGitSync extends Plugin {
 		return this.hostCache.host;
 	}
 
-	// "the server" starts a sentence as "The server"
 	get hostName(): string {
+		return capitalize(this.host.name);
+	}
+
+	// "the GitLab token", but "the token for the server"
+	get tokenName(): string {
 		const name = this.host.name;
-		return name.charAt(0).toUpperCase() + name.slice(1);
+		return name.startsWith("the ") ? `the token for ${name}` : `the ${name} token`;
 	}
 
 	async setConnection(connection: Partial<Connection>): Promise<void> {
@@ -881,7 +886,7 @@ export default class EasyGitSync extends Plugin {
 		this.saveDevice();
 		const when = expiry.getTime() < Date.now() ? "expired on" : "expires on";
 		new Notice(
-			`Easy Git Sync: the ${this.host.name} token ${when} ${expiry.toLocaleDateString()}. Create a new one in the settings to keep syncing.`,
+			`Easy Git Sync: ${this.tokenName} ${when} ${expiry.toLocaleDateString()}. Create a new one in the settings to keep syncing.`,
 			15_000,
 		);
 	}
@@ -1038,7 +1043,8 @@ export default class EasyGitSync extends Plugin {
 			if (!this.device.repo) return "enter the repository's address in the settings to start.";
 			if (!this.hasToken()) return "enter the login for the repository in the settings to start.";
 		}
-		if (!this.hasToken()) return `add a ${this.host.name} token in the settings to start.`;
+		if (!this.hasToken())
+			return `add ${this.tokenName.replace(/^the /, "a ")} in the settings to start.`;
 		if (!this.device.repo) return "choose a repository in the settings to start.";
 		if (!this.device.started) return 'press "Start syncing" in the settings.';
 		return this.blocked ?? "not ready.";

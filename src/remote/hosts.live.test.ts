@@ -52,8 +52,16 @@ if (gitlabSetup && gitlabPlugin) {
 			})) as { path_with_namespace: string };
 			return project.path_with_namespace;
 		},
+		// gitlab.com only schedules a deletion, which a second call with the new path makes final
 		async remove(fullName) {
-			await call(`https://gitlab.com/api/v4/projects/${encodeURIComponent(fullName)}`, {
+			const api = "https://gitlab.com/api/v4/projects";
+			const { id } = (await call(`${api}/${encodeURIComponent(fullName)}`, { headers })) as {
+				id: number;
+			};
+			await call(`${api}/${id}`, { method: "DELETE", headers });
+			const marked = (await call(`${api}/${id}`, { headers })) as { path_with_namespace: string };
+			const path = encodeURIComponent(marked.path_with_namespace);
+			await call(`${api}/${id}?permanently_remove=true&full_path=${path}`, {
 				method: "DELETE",
 				headers,
 			});
@@ -117,7 +125,7 @@ for (const entry of (process.env.EASY_GIT_FORGEJO ?? "").split(",").filter(Boole
 			await call(`${server}/api/v1/repos/${fullName}`, { method: "DELETE", headers });
 		},
 		async email(host) {
-			return `${(await host.account()).login.toLowerCase()}@noreply.${new URL(server).host}`;
+			return `${(await host.account()).login.toLowerCase()}@noreply.${new URL(server).hostname}`;
 		},
 	});
 }

@@ -1,4 +1,5 @@
 import { type App, Modal, Setting, SuggestModal } from "obsidian";
+import { capitalize } from "./lib/format";
 import type EasyGitSync from "./main";
 import type { RepoInfo } from "./remote/hosts";
 import type { FirstSync } from "./sync/engine";
@@ -232,8 +233,4 @@ export class ConflictsModal extends SuggestModal<string> {
 	onChooseSuggestion(path: string): void {
 		this.onPick(path);
 	}
-}
-
-function capitalize(text: string): string {
-	return text.charAt(0).toUpperCase() + text.slice(1);
 }
