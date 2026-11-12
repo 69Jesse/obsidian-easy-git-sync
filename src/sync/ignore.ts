@@ -32,6 +32,8 @@ export class GitIgnore {
 }
 
 export function isHardExcluded(path: string, stateFile: string): boolean {
+	// versions waiting to be pushed by the git transport, next to the state
+	const kept = `${stateFile.slice(0, stateFile.lastIndexOf("/") + 1)}kept`;
 	return (
 		path === ".git" ||
 		path.startsWith(".git/") ||
@@ -39,6 +41,8 @@ export function isHardExcluded(path: string, stateFile: string): boolean {
 		path.startsWith(".trash/") ||
 		path === stateFile ||
 		path === `${stateFile}.tmp` ||
+		path === kept ||
+		path.startsWith(`${kept}/`) ||
 		ICLOUD_PLACEHOLDER.test(path)
 	);
 }

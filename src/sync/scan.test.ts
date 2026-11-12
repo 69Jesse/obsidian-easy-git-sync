@@ -34,6 +34,14 @@ describe("scanLocal", () => {
 		expect(await scan(fs)).toEqual(["notes/Today.md"]);
 	});
 
+	it("leaves out the state and the versions waiting to be pushed", async () => {
+		const fs = new MemoryFs();
+		fs.set(STATE, "{}");
+		fs.set(".obsidian/plugins/easy-git-sync/kept/0123abcd", "losing version");
+		fs.set(".obsidian/plugins/easy-git-sync/main.js", "code");
+		expect(await scan(fs)).toEqual([".obsidian/plugins/easy-git-sync/main.js"]);
+	});
+
 	it("lists files in path order, however the folders finish", async () => {
 		const fs = new MemoryFs();
 		for (const path of ["z.md", "b/2.md", "a/1.md", "b/a/0.md", "a.md"]) fs.set(path, path);
