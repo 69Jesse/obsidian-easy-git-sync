@@ -8,7 +8,7 @@ import {
 	Setting,
 } from "obsidian";
 import type EasyGitSync from "./main";
-import { RepoPickerModal } from "./modals";
+import { confirm, RepoPickerModal } from "./modals";
 import {
 	type Connection,
 	DEFAULT_SERVERS,
@@ -366,6 +366,19 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 						.setButtonText("Disconnect")
 						.setWarning()
 						.onClick(async () => {
+							const login = plugin.device.provider === "other" ? "password" : "token";
+							const ok = await confirm(
+								this.app,
+								"Disconnect this device?",
+								[
+									plugin.device.started
+										? `This device stops syncing with ${plugin.repoLabel} and forgets its ${login} and sync history. Your notes are not touched.`
+										: `This device forgets its ${login}. Your notes are not touched.`,
+								],
+								"Disconnect",
+								true,
+							);
+							if (!ok) return;
 							await plugin.disconnect();
 							new Notice("Easy Git Sync: this device is disconnected.");
 							this.display();
