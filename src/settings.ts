@@ -206,6 +206,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 	private revalidate = true;
 	private accountLine: HTMLElement | null = null;
 	private chooseButton: ButtonComponent | null = null;
+	private repoSetting: Setting | null = null;
 	private commitButton: ButtonComponent | null = null;
 	private hintEl: HTMLElement | null = null;
 	private tokenTimer: number | undefined;
@@ -223,6 +224,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 		this.chooseButton = null;
+		this.repoSetting = null;
 		this.commitButton = null;
 		this.hintEl = null;
 		this.accountLine = null;
@@ -466,7 +468,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			this.displayOther(containerEl, draft);
 		} else {
 			this.displayToken(containerEl, draft);
-			new Setting(containerEl)
+			this.repoSetting = new Setting(containerEl)
 				.setName("Repository")
 				.setDesc(
 					draft.repo
@@ -694,10 +696,25 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			const found = await plugin.draftLookup(maxAge);
 			if (!found || id !== this.checkId) return;
 			show(found);
+			await this.prefill(found);
 		} catch (error) {
 			if (id !== this.checkId) return;
 			line.setText(error instanceof Error ? error.message : String(error));
 			line.addClass("mod-warning");
 		}
+	}
+
+	// one repository the token can write to, with one branch: nothing to choose, so it is filled in
+	private async prefill(found: Lookup): Promise<void> {
+		const plugin = this.plugin;
+		const writable = found.repos.filter((repo) => repo.canPush);
+		const only = writable.length === 1 ? writable[0] : undefined;
+		if (!only || plugin.draft?.repo !== null) return;
+		if (!(await plugin.pickDraftRepo(only.fullName, true))) return;
+		const draft = plugin.draft;
+		if (!draft?.repo || !this.repoSetting?.settingEl.isConnected) return;
+		this.repoSetting.setDesc(`${draft.repo}, branch ${draft.branch}.`);
+		this.chooseButton?.setButtonText("Change");
+		this.refreshDraft();
 	}
 }

@@ -352,7 +352,8 @@ export default class EasyGitSync extends Plugin {
 		return draft.token !== null || draft.username !== live.username ? "login" : "none";
 	}
 
-	async pickDraftRepo(fullName: string): Promise<boolean> {
+	// quiet: no notices and no branch picker, so it only fills in what leaves nothing to choose
+	async pickDraftRepo(fullName: string, quiet = false): Promise<boolean> {
 		const draft = this.draft;
 		const host = this.draftHost();
 		if (!draft || !host) return false;
@@ -360,25 +361,27 @@ export default class EasyGitSync extends Plugin {
 		try {
 			repo = await host.repo(fullName);
 		} catch (error) {
-			new Notice(`Easy Git Sync: could not open ${fullName}. ${describe(error)}`);
+			if (!quiet) new Notice(`Easy Git Sync: could not open ${fullName}. ${describe(error)}`);
 			return false;
 		}
 		if (!repo.canPush) {
-			new Notice(`Easy Git Sync: ${readOnly(host.id, repo.fullName)}`, 10_000);
+			if (!quiet) new Notice(`Easy Git Sync: ${readOnly(host.id, repo.fullName)}`, 10_000);
 			return false;
 		}
 		let branch = repo.defaultBranch;
 		if (!repo.empty) {
 			const branches = await host
 				.branches(repo.fullName, repo.defaultBranch)
-				.catch(() => [repo.defaultBranch]);
+				.catch((): string[] => []);
+			// a failed listing falls back to the default branch, but is not a choice made for anyone
+			if (quiet && branches.length !== 1) return false;
 			if (branches.length > 1) {
 				const picked = await pickBranch(this.app, repo.fullName, branches, repo.defaultBranch);
 				if (picked === null) return false;
 				branch = picked;
 			}
 		}
-		if (this.draft !== draft) return false;
+		if (this.draft !== draft || (quiet && draft.repo !== null)) return false;
 		draft.repo = repo.fullName;
 		draft.branch = branch;
 		draft.checked = true;
