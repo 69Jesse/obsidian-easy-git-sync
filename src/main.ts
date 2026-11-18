@@ -18,7 +18,14 @@ import { hasConflictMarker, resolveAllNewer } from "./merge/conflict";
 import { ConflictsModal, chooseFirstSync, confirm, pickBranch } from "./modals";
 import { conflictPostProcessor } from "./reading";
 import type { BlobStash } from "./remote/git-remote";
-import { type Connection, createHost, type Host, type ProviderId } from "./remote/hosts";
+import {
+	type Account,
+	type Connection,
+	createHost,
+	type Host,
+	type ProviderId,
+	type RepoInfo,
+} from "./remote/hosts";
 import { type Http, OfflineError, RemoteError } from "./remote/http";
 import {
 	type DeviceSettings,
@@ -45,6 +52,13 @@ const FULL_SYNC_EVERY = 10 * 60_000;
 const OWN_WRITE_ECHO = 5_000;
 const EXPIRY_WARNING = 14 * 24 * 60 * 60_000;
 const EXPIRY_CHECK_EVERY = 24 * 60 * 60_000;
+const LOOKUP_FRESH = 5 * 60_000;
+
+export interface Lookup {
+	account: Account;
+	repos: RepoInfo[];
+	expiry: Date | null;
+}
 
 type Status =
 	| { kind: "setup"; text: string }
@@ -90,6 +104,10 @@ export default class EasyGitSync extends Plugin {
 	draft: Draft | null = null;
 	private draftHostCache: { key: string; host: Host } | null = null;
 	private committing = false;
+	private lookups = new Map<
+		string,
+		{ at: number; pending: Promise<Lookup>; value: Lookup | null; loading: boolean }
+	>();
 	private settingTab: EasyGitSyncSettingTab | null = null;
 	private fs!: ObsidianFs;
 	private expiryChecked = 0;
@@ -503,14 +521,63 @@ export default class EasyGitSync extends Plugin {
 		this.reschedule();
 	}
 
-	// refreshed quietly when the settings open, so the connection row names the account
+	// also the prefetch that lets "Change connection" show the token check at once
 	async refreshAccount(): Promise<void> {
-		if (!this.device.started || !this.hasToken()) return;
-		const account = await this.host.account().catch(() => null);
-		if (!account || account.login === this.device.account || !this.device.started) return;
-		this.device.account = account.login;
+		if (!this.device.started || !this.hasToken() || this.device.provider === "other") return;
+		const found = await this.lookup(this.host, this.connection, this.token()).catch(() => null);
+		const login = found?.account.login;
+		if (!login || login === this.device.account || !this.device.started) return;
+		this.device.account = login;
 		this.saveDevice();
 		this.render();
+	}
+
+	// shared for a few minutes: listing costs a request per page, and on GitHub one per repository
+	lookup(
+		host: Host,
+		connection: Connection,
+		token: string | null,
+		maxAge = LOOKUP_FRESH,
+	): Promise<Lookup> {
+		const key = lookupKey(connection, token);
+		const old = this.lookups.get(key);
+		// one still loading is as fresh as a new one would be
+		if (old && (old.loading || Date.now() - old.at < maxAge)) return old.pending;
+		const pending = Promise.all([
+			host.account(),
+			host.repos(),
+			host.tokenExpiry().catch(() => null),
+		]).then(([account, repos, expiry]) => ({ account, repos, expiry }));
+		// the last answer stays readable while a newer one loads
+		const entry = { at: Date.now(), pending, value: old?.value ?? null, loading: true };
+		this.lookups.set(key, entry);
+		pending.then(
+			(value) => {
+				entry.value = value;
+				entry.loading = false;
+			},
+			() => {
+				if (this.lookups.get(key) !== entry) return;
+				if (old) this.lookups.set(key, old);
+				else this.lookups.delete(key);
+			},
+		);
+		return pending;
+	}
+
+	peekLookup(connection: Connection, token: string | null): Lookup | null {
+		return this.lookups.get(lookupKey(connection, token))?.value ?? null;
+	}
+
+	draftLookup(maxAge?: number): Promise<Lookup> | null {
+		const draft = this.draft;
+		const host = this.draftHost();
+		if (!draft || !host) return null;
+		return this.lookup(host, connectionOf(draft), this.draftToken(), maxAge);
+	}
+
+	peekDraftLookup(): Lookup | null {
+		return this.draft ? this.peekLookup(connectionOf(this.draft), this.draftToken()) : null;
 	}
 
 	saveDevice(): void {
@@ -1340,6 +1407,11 @@ function readOnly(provider: Host["id"], repo: string): string {
 		case "other":
 			return `the login can read ${repo} but not write to it.`;
 	}
+}
+
+// in memory only; the token is part of the key so a new paste never reads an old answer
+function lookupKey({ provider, server, username }: Connection, token: string | null): string {
+	return JSON.stringify([provider, server, username, token]);
 }
 
 function connectionOf({ provider, server, username }: Connection): Connection {

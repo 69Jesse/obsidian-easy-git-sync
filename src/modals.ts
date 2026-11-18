@@ -1,15 +1,17 @@
 import { type App, Modal, Setting, SuggestModal } from "obsidian";
 import { capitalize } from "./lib/format";
-import type { Host, RepoInfo } from "./remote/hosts";
+import type { RepoInfo } from "./remote/hosts";
 import type { FirstSync } from "./sync/engine";
 
 export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
 	private repos: RepoInfo[] = [];
 	private loaded = false;
 
+	// a list fetched earlier shows at once; the fresh one replaces it when it arrives
 	constructor(
 		app: App,
-		private readonly host: Host,
+		private readonly cached: RepoInfo[] | null,
+		private readonly fresh: Promise<RepoInfo[]>,
 		private readonly onPick: (fullName: string) => void | Promise<void>,
 	) {
 		super(app);
@@ -19,19 +21,23 @@ export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
 
 	override onOpen(): void {
 		void super.onOpen();
-		void this.host.repos().then(
-			(repos) => {
-				this.repos = repos.filter((repo) => repo.canPush);
-				this.loaded = true;
-				this.emptyStateText = "No repository matches. Type owner/name to use one anyway.";
-				// re-runs the query so the list appears
-				this.inputEl.dispatchEvent(new Event("input"));
-			},
+		if (this.cached) this.show(this.cached);
+		void this.fresh.then(
+			(repos) => this.show(repos),
 			(error: unknown) => {
+				if (this.loaded) return;
 				this.emptyStateText = error instanceof Error ? error.message : String(error);
 				this.inputEl.dispatchEvent(new Event("input"));
 			},
 		);
+	}
+
+	private show(repos: RepoInfo[]): void {
+		this.repos = repos.filter((repo) => repo.canPush);
+		this.loaded = true;
+		this.emptyStateText = "No repository matches. Type owner/name to use one anyway.";
+		// re-runs the query so the list appears
+		this.inputEl.dispatchEvent(new Event("input"));
 	}
 
 	getSuggestions(query: string): Array<RepoInfo | string> {

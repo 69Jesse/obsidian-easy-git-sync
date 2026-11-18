@@ -7,7 +7,7 @@ import {
 	PluginSettingTab,
 	Setting,
 } from "obsidian";
-import type EasyGitSync from "./main";
+import type { default as EasyGitSync, Lookup } from "./main";
 import { confirm, RepoPickerModal } from "./modals";
 import {
 	type Connection,
@@ -202,6 +202,8 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 	private connectionSetting: Setting | null = null;
 	// the draft's fields are shown; leaving the settings folds them away, keeping what was typed
 	private draftOpen = false;
+	// a token's access can grow without the token changing, so showing the fields asks again
+	private revalidate = true;
 	private accountLine: HTMLElement | null = null;
 	private chooseButton: ButtonComponent | null = null;
 	private commitButton: ButtonComponent | null = null;
@@ -248,6 +250,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 							} else {
 								plugin.beginDraft();
 								this.draftOpen = true;
+								this.revalidate = true;
 							}
 							this.display();
 						}),
@@ -389,6 +392,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 
 	override hide(): void {
 		this.draftOpen = false;
+		this.revalidate = true;
 		super.hide();
 	}
 
@@ -472,9 +476,11 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 				.addButton((button) => {
 					this.chooseButton = button;
 					button.setButtonText(draft.repo ? "Change" : "Choose").onClick(() => {
-						const host = plugin.draftHost();
-						if (!host) return;
-						new RepoPickerModal(this.app, host, async (fullName) => {
+						// a list older than a minute shows while a fresh one loads, for a repository just made
+						const fresh = plugin.draftLookup(60_000)?.then((found) => found.repos);
+						if (!fresh) return;
+						const cached = plugin.peekDraftLookup()?.repos ?? null;
+						new RepoPickerModal(this.app, cached, fresh, async (fullName) => {
 							if (await plugin.pickDraftRepo(fullName)) this.display();
 						}).open();
 					});
@@ -656,16 +662,12 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			return;
 		}
 		const typed = draft.token !== null;
-		line.setText("Checking the token...");
-		line.removeClass("mod-warning");
 		const id = ++this.checkId;
-		try {
-			const [account, repos, expiry] = await Promise.all([
-				host.account(),
-				host.repos(),
-				host.tokenExpiry().catch(() => null),
-			]);
-			if (id !== this.checkId) return;
+		// redraws in between, such as after picking a repository, use the answer just fetched
+		const maxAge = this.revalidate ? 0 : undefined;
+		this.revalidate = false;
+		const show = ({ account, repos, expiry }: Lookup) => {
+			line.removeClass("mod-warning");
 			const who = typed
 				? `The new token is for @${account.login}`
 				: `A token is saved for @${account.login}`;
@@ -680,6 +682,18 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			line.setText(
 				`${who}. ${count} ${count === 1 ? "repository" : "repositories"} available.${until}`,
 			);
+		};
+		const cached = plugin.peekDraftLookup();
+		if (cached) {
+			show(cached);
+		} else {
+			line.setText("Checking the token...");
+			line.removeClass("mod-warning");
+		}
+		try {
+			const found = await plugin.draftLookup(maxAge);
+			if (!found || id !== this.checkId) return;
+			show(found);
 		} catch (error) {
 			if (id !== this.checkId) return;
 			line.setText(error instanceof Error ? error.message : String(error));
