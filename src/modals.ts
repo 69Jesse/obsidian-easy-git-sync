@@ -1,7 +1,6 @@
 import { type App, Modal, Setting, SuggestModal } from "obsidian";
 import { capitalize } from "./lib/format";
-import type EasyGitSync from "./main";
-import type { RepoInfo } from "./remote/hosts";
+import type { Host, RepoInfo } from "./remote/hosts";
 import type { FirstSync } from "./sync/engine";
 
 export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
@@ -10,7 +9,7 @@ export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
 
 	constructor(
 		app: App,
-		private readonly plugin: EasyGitSync,
+		private readonly host: Host,
 		private readonly onPick: (fullName: string) => void | Promise<void>,
 	) {
 		super(app);
@@ -20,7 +19,7 @@ export class RepoPickerModal extends SuggestModal<RepoInfo | string> {
 
 	override onOpen(): void {
 		void super.onOpen();
-		void this.plugin.host.repos().then(
+		void this.host.repos().then(
 			(repos) => {
 				this.repos = repos.filter((repo) => repo.canPush);
 				this.loaded = true;
@@ -141,6 +140,8 @@ export interface FirstSyncSummary {
 	download: number;
 	merge: number;
 	newest: boolean;
+	// the connection this device leaves, when it had one
+	leaving: string | null;
 }
 
 export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSync | null> {
@@ -154,6 +155,7 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 				this.contentEl.createEl("p", {
 					text: `Both have files. ${files(s.same)} are the same on both sides, ${files(s.upload)} only in this vault, ${files(s.download)} only on ${s.remote}, and ${files(s.merge)} differ.`,
 				});
+				if (s.leaving) this.contentEl.createEl("p", { text: s.leaving });
 				const choice = (name: string, desc: string, action: string, value: FirstSync) => {
 					const setting = new Setting(this.contentEl).setName(name).setDesc(desc);
 					setting.settingEl.addClass("easy-git-sync-choice");

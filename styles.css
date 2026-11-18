@@ -203,3 +203,32 @@ body {
 	mask-repeat: no-repeat;
 	mask-size: contain;
 }
+
+/* the connection's state, as a dot in front of its name */
+.easy-git-sync-dot {
+	display: inline-block;
+	width: 0.5em;
+	height: 0.5em;
+	margin-inline-end: 0.5em;
+	border-radius: 50%;
+	vertical-align: middle;
+	background-color: var(--text-faint);
+}
+
+.easy-git-sync-dot.is-ok {
+	background-color: var(--color-green);
+}
+
+.easy-git-sync-dot.is-warning {
+	background-color: var(--color-orange);
+}
+
+.easy-git-sync-dot.is-error {
+	background-color: var(--color-red);
+}
+
+/* Obsidian does not dim a disabled call-to-action button */
+.easy-git-sync-draft-footer button.mod-cta:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}

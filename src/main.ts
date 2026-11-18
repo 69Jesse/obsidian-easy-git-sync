@@ -18,10 +18,11 @@ import { hasConflictMarker, resolveAllNewer } from "./merge/conflict";
 import { ConflictsModal, chooseFirstSync, confirm, pickBranch } from "./modals";
 import { conflictPostProcessor } from "./reading";
 import type { BlobStash } from "./remote/git-remote";
-import { type Connection, createHost, type Host } from "./remote/hosts";
+import { type Connection, createHost, type Host, type ProviderId } from "./remote/hosts";
 import { type Http, OfflineError, RemoteError } from "./remote/http";
 import {
 	type DeviceSettings,
+	type Draft,
 	defaultDeviceName,
 	type EasyGitSyncSettings,
 	EasyGitSyncSettingTab,
@@ -86,6 +87,10 @@ export default class EasyGitSync extends Plugin {
 	override settings!: EasyGitSyncSettings;
 	device!: DeviceSettings;
 	private hostCache: { key: string; host: Host } | null = null;
+	draft: Draft | null = null;
+	private draftHostCache: { key: string; host: Host } | null = null;
+	private committing = false;
+	private settingTab: EasyGitSyncSettingTab | null = null;
 	private fs!: ObsidianFs;
 	private expiryChecked = 0;
 	private state: SyncState | null = null;
@@ -118,7 +123,8 @@ export default class EasyGitSync extends Plugin {
 		this.loadDevice();
 		this.fs = new ObsidianFs(this.app);
 
-		this.addSettingTab(new EasyGitSyncSettingTab(this.app, this));
+		this.settingTab = new EasyGitSyncSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
 		this.registerEditorExtension(conflictEditorExtension());
 		this.registerMarkdownPostProcessor(conflictPostProcessor(this.app));
 
@@ -127,7 +133,7 @@ export default class EasyGitSync extends Plugin {
 		this.registerDomEvent(this.statusEl, "click", (event) => this.showMenu(event));
 		this.ribbonEl = this.addRibbonIcon(
 			"refresh-cw",
-			`Sync with ${this.host.name}`,
+			this.connectionLabel(),
 			() => void this.syncNow("manual"),
 		);
 		this.ribbonEl.addClass("easy-git-sync-ribbon");
@@ -242,17 +248,268 @@ export default class EasyGitSync extends Plugin {
 		return name.startsWith("the ") ? `the token for ${name}` : `the ${name} token`;
 	}
 
-	async setConnection(connection: Partial<Connection>): Promise<void> {
-		const next = { ...this.connection, ...connection };
-		if (JSON.stringify(next) === JSON.stringify(this.connection)) return;
-		const { firstSync: _, ...device } = this.device;
-		this.device = { ...device, ...next, repo: null, branch: "main", started: false };
+	beginDraft(): Draft {
+		if (!this.draft) {
+			const { provider, server, username, repo, branch } = this.device;
+			this.draft = {
+				provider,
+				server,
+				username,
+				token: null,
+				repo,
+				branch,
+				checked: repo !== null,
+			};
+		}
+		return this.draft;
+	}
+
+	cancelDraft(): void {
+		this.draft = null;
+	}
+
+	setDraftConnection(change: Partial<Connection>): void {
+		const draft = this.beginDraft();
+		const before = connectionOf(draft);
+		const next = { ...before, ...change };
+		if (JSON.stringify(next) === JSON.stringify(before)) return;
+		const sameHost = next.provider === before.provider && next.server === before.server;
+		const live = this.connection;
+		// back on the live host, so its repository need not be picked again
+		const home =
+			this.device.started && next.provider === live.provider && next.server === live.server;
+		const repo = sameHost
+			? {}
+			: home
+				? { repo: this.device.repo, branch: this.device.branch, checked: true }
+				: { repo: null, branch: "main", checked: false };
+		this.draft = { ...draft, ...next, token: null, ...repo };
+	}
+
+	draftHost(): Host | null {
+		const draft = this.draft;
+		if (!draft) return null;
+		const connection = connectionOf(draft);
+		const key = JSON.stringify(connection);
+		if (this.draftHostCache?.key !== key) {
+			this.draftHostCache = {
+				key,
+				host: createHost(connection, {
+					http: obsidianHttp,
+					token: () => this.draftToken(),
+					sleep: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
+				}),
+			};
+		}
+		return this.draftHostCache.host;
+	}
+
+	draftToken(): string | null {
+		const draft = this.draft;
+		if (!draft) return null;
+		return draft.token ?? this.savedToken(connectionOf(draft));
+	}
+
+	draftSavedToken(): boolean {
+		return this.draft !== null && this.savedToken(connectionOf(this.draft)) !== null;
+	}
+
+	draftHasLogin(): boolean {
+		const draft = this.draft;
+		if (!draft) return false;
+		return this.draftToken() !== null || (draft.provider === "other" && draft.username !== "");
+	}
+
+	draftChange(): "none" | "login" | "target" {
+		const draft = this.draft;
+		if (!draft) return "none";
+		if (!this.device.started) return "target";
+		const live = this.device;
+		const sameTarget =
+			draft.provider === live.provider &&
+			draft.server === live.server &&
+			draft.repo === live.repo &&
+			draft.branch === live.branch;
+		if (!sameTarget) return "target";
+		return draft.token !== null || draft.username !== live.username ? "login" : "none";
+	}
+
+	async pickDraftRepo(fullName: string): Promise<boolean> {
+		const draft = this.draft;
+		const host = this.draftHost();
+		if (!draft || !host) return false;
+		let repo: Awaited<ReturnType<Host["repo"]>>;
+		try {
+			repo = await host.repo(fullName);
+		} catch (error) {
+			new Notice(`Easy Git Sync: could not open ${fullName}. ${describe(error)}`);
+			return false;
+		}
+		if (!repo.canPush) {
+			new Notice(`Easy Git Sync: ${readOnly(host.id, repo.fullName)}`, 10_000);
+			return false;
+		}
+		let branch = repo.defaultBranch;
+		if (!repo.empty) {
+			const branches = await host
+				.branches(repo.fullName, repo.defaultBranch)
+				.catch(() => [repo.defaultBranch]);
+			if (branches.length > 1) {
+				const picked = await pickBranch(this.app, repo.fullName, branches, repo.defaultBranch);
+				if (picked === null) return false;
+				branch = picked;
+			}
+		}
+		if (this.draft !== draft) return false;
+		draft.repo = repo.fullName;
+		draft.branch = branch;
+		draft.checked = true;
+		return true;
+	}
+
+	// true once the draft is the live connection; false leaves both as they were
+	async commitDraft(): Promise<boolean> {
+		const draft = this.draft;
+		const host = this.draftHost();
+		if (!draft?.repo || !host || this.committing) return false;
+		if (this.otherGitPluginEnabled()) {
+			new Notice("Easy Git Sync: turn off the Git plugin on this device first.");
+			return false;
+		}
+		this.committing = true;
+		try {
+			if (!draft.checked && !(await this.pickDraftRepo(draft.repo))) return false;
+			const repo = draft.repo;
+			const change = this.draftChange();
+			if (change === "none") return false;
+			if (change === "login") {
+				try {
+					const info = await host.repo(repo);
+					if (!info.canPush) {
+						new Notice(`Easy Git Sync: ${readOnly(host.id, repo)}`, 10_000);
+						return false;
+					}
+				} catch (error) {
+					new Notice(`Easy Git Sync: ${describe(error)}`);
+					return false;
+				}
+				const account = await host.account().catch(() => null);
+				await this.applyDraft(draft, null, account?.login);
+				void this.syncNow("manual");
+				return true;
+			}
+			const firstSync = await this.confirmStart(draft, host);
+			if (firstSync === null || this.draft !== draft) return false;
+			const account = await host.account().catch(() => null);
+			await this.applyDraft(draft, firstSync, account?.login);
+			void this.syncNow("manual");
+			return true;
+		} finally {
+			this.committing = false;
+		}
+	}
+
+	// the preview and the first-sync choice, against the draft and without touching the live sync
+	private async confirmStart(draft: Draft, host: Host): Promise<FirstSync | null> {
+		const repo = draft.repo ?? "";
+		const label = repoLabelOf(draft.provider, repo);
+		const remote = host.remote(repo, draft.branch, this.settings.commitAsAccount, null);
+		const notice = new Notice(`Easy Git Sync: comparing with ${host.name}...`, 0);
+		let summary: Awaited<ReturnType<typeof preview>>;
+		try {
+			summary = await preview(emptyState(targetOf(draft)), {
+				fs: this.fs,
+				remote,
+				device: this.device.deviceName,
+				stateFile: this.stateFile,
+				configDir: this.app.vault.configDir,
+				conflicts: this.settings.conflicts,
+				remoteName: host.name,
+				saveState: async () => {},
+			});
+		} catch (error) {
+			notice.hide();
+			new Notice(`Easy Git Sync: ${describe(error)}`);
+			return null;
+		}
+		notice.hide();
+		const leaving = this.device.started
+			? `This device stops syncing with ${this.repoLabel} on ${this.host.name}.`
+			: null;
+		const { notes } = summary;
+		// asked only when both sides have notes that differ: a fresh phone never offers to wipe the remote
+		if (!summary.emptyRemote && notes.here > 0 && notes.there > 0 && notes.differ > 0) {
+			return chooseFirstSync(this.app, {
+				repo: label,
+				remote: host.name,
+				same: summary.same,
+				upload: summary.upload,
+				download: summary.download,
+				merge: summary.merge,
+				newest: this.settings.conflicts === "newest",
+				leaving,
+			});
+		}
+		const lines = summary.emptyRemote
+			? [`${label} is empty. This vault becomes its first commit: ${summary.upload} files.`]
+			: [
+					`Already the same on both sides: ${summary.same} files.`,
+					`Only in this vault, to upload: ${summary.upload}.`,
+					`Only on ${host.name}, to download: ${summary.download}.`,
+				];
+		if (leaving) lines.push(leaving);
+		const ok = await confirm(this.app, `Start syncing with ${label}?`, lines, "Start syncing");
+		return ok ? "merge" : null;
+	}
+
+	// a new target starts a fresh sync history; a new login keeps it
+	private async applyDraft(
+		draft: Draft,
+		firstSync: FirstSync | null,
+		account: string | undefined,
+	): Promise<void> {
+		// a sync that started meanwhile must finish against the target it read
+		while (this.running) await this.running.catch(() => {});
+		const connection = connectionOf(draft);
+		if (draft.token !== null) {
+			this.app.secretStorage.setSecret(this.tokenIdFor(connection), draft.token);
+		}
+		const { firstSync: pending, account: before, ...device } = this.device;
+		// a new login for the same sync keeps the name it had if the lookup failed
+		const login = account ?? (firstSync === null ? before : undefined);
+		this.device = {
+			...device,
+			...connection,
+			repo: draft.repo,
+			branch: draft.branch,
+			started: true,
+			...(login ? { account: login } : {}),
+		};
+		if (firstSync !== null) {
+			this.device.firstSync = firstSync;
+			this.state = emptyState(this.target);
+			await this.saveState();
+			this.lockstep = undefined;
+			this.lastSynced = null;
+		} else if (pending) {
+			this.device.firstSync = pending;
+		}
 		this.saveDevice();
-		this.state = emptyState(this.target);
-		await this.saveState();
-		this.lockstep = undefined;
+		this.draft = null;
 		this.blocked = null;
+		this.lastErrorShown = null;
+		this.expiryChecked = 0;
+		this.setStatus({ kind: "idle" });
 		this.reschedule();
+	}
+
+	// refreshed quietly when the settings open, so the connection row names the account
+	async refreshAccount(): Promise<void> {
+		if (!this.device.started || !this.hasToken()) return;
+		const account = await this.host.account().catch(() => null);
+		if (!account || account.login === this.device.account || !this.device.started) return;
+		this.device.account = account.login;
+		this.saveDevice();
 		this.render();
 	}
 
@@ -262,19 +519,27 @@ export default class EasyGitSync extends Plugin {
 
 	// per vault, in case the keychain is shared: two vaults must not overwrite each other's token;
 	// and per provider and server, so switching back finds the token that was there
-	private get tokenId(): string {
+	private tokenIdFor(connection: Connection): string {
 		const appId = (this.app as unknown as { appId?: string }).appId;
 		const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
 		const suffix = slug(appId ?? "");
 		const base = suffix ? `${TOKEN_SECRET}-${suffix}` : TOKEN_SECRET;
-		const { provider, server, username } = this.device;
+		const { provider, server, username } = connection;
 		if (provider === "github") return base;
 		const where = provider === "other" ? `${server}${username}` : server;
 		return `${base}-${provider}${where ? `-${slug(where)}` : ""}`;
 	}
 
+	private get tokenId(): string {
+		return this.tokenIdFor(this.connection);
+	}
+
+	private savedToken(connection: Connection): string | null {
+		return this.app.secretStorage.getSecret(this.tokenIdFor(connection)) || null;
+	}
+
 	token(): string | null {
-		return this.app.secretStorage.getSecret(this.tokenId) || null;
+		return this.savedToken(this.connection);
 	}
 
 	// another git server may take a login without a password
@@ -282,13 +547,6 @@ export default class EasyGitSync extends Plugin {
 		return (
 			this.token() !== null || (this.device.provider === "other" && this.device.username !== "")
 		);
-	}
-
-	setToken(token: string): void {
-		this.app.secretStorage.setSecret(this.tokenId, token);
-		this.blocked = null;
-		this.expiryChecked = 0;
-		this.render();
 	}
 
 	otherGitPluginEnabled(): boolean {
@@ -307,12 +565,8 @@ export default class EasyGitSync extends Plugin {
 			: null;
 	}
 
-	// GitHub's targets keep their old form, so an existing state stays valid
 	private get target(): string {
-		const { provider, server, repo, branch } = this.device;
-		if (provider === "github") return `${repo}@${branch}`;
-		const where = provider === "other" ? "" : `${server.replace(/^https?:\/\//, "")}/`;
-		return `${provider}:${where}${repo}@${branch}`;
+		return targetOf(this.device);
 	}
 
 	private get pluginDir(): string {
@@ -353,117 +607,33 @@ export default class EasyGitSync extends Plugin {
 		);
 	}
 
-	async selectRepo(fullName: string): Promise<void> {
-		const host = this.host;
-		let repo: Awaited<ReturnType<Host["repo"]>>;
-		try {
-			repo = await host.repo(fullName);
-		} catch (error) {
-			new Notice(`Easy Git Sync: could not open ${fullName}. ${describe(error)}`);
-			return;
-		}
-		if (!repo.canPush) {
-			new Notice(`Easy Git Sync: ${readOnly(host.id, repo.fullName)}`, 10_000);
-			return;
-		}
-		let branch = repo.defaultBranch;
-		if (!repo.empty) {
-			const branches = await host
-				.branches(repo.fullName, repo.defaultBranch)
-				.catch(() => [repo.defaultBranch]);
-			if (branches.length > 1) {
-				const picked = await pickBranch(this.app, repo.fullName, branches, repo.defaultBranch);
-				if (picked === null) return;
-				branch = picked;
-			}
-		}
-		// an empty base would merge every differing note as if both sides created it
-		if (`${repo.fullName}@${branch}` === this.target) return;
-		const { firstSync: _, ...device } = this.device;
-		this.device = {
-			...device,
-			repo: repo.fullName,
-			branch,
-			started: false,
-		};
-		this.saveDevice();
-		this.state = emptyState(this.target);
-		await this.saveState();
-		this.lockstep = undefined;
-		this.blocked = null;
-		this.render();
-	}
-
-	async start(): Promise<void> {
-		if (this.otherGitPluginEnabled()) {
-			new Notice("Easy Git Sync: turn off the Git plugin on this device first.");
-			return;
-		}
-		this.setStatus({ kind: "syncing", text: `Comparing with ${this.host.name}` });
-		let summary: Awaited<ReturnType<typeof preview>>;
-		try {
-			summary = await preview(await this.loadState(), this.syncOptions(false));
-		} catch (error) {
-			this.setStatus({ kind: "error", text: describe(error) });
-			new Notice(`Easy Git Sync: ${describe(error)}`);
-			return;
-		}
-		this.setStatus({ kind: "idle" });
-		const repo = this.repoLabel;
-		// asked only when both sides have notes that differ: a fresh phone never offers to wipe the remote
-		const hereOnly = summary.upload;
-		const thereOnly = summary.download;
-		const { notes } = summary;
-		let firstSync: FirstSync = "merge";
-		if (!summary.emptyRemote && notes.here > 0 && notes.there > 0 && notes.differ > 0) {
-			const chosen = await chooseFirstSync(this.app, {
-				repo,
-				remote: this.host.name,
-				same: summary.same,
-				upload: hereOnly,
-				download: thereOnly,
-				merge: summary.merge,
-				newest: this.settings.conflicts === "newest",
-			});
-			if (chosen === null) return;
-			firstSync = chosen;
-		} else {
-			const lines = summary.emptyRemote
-				? [
-						`${this.repoLabel} is empty. This vault becomes its first commit: ${summary.upload} files.`,
-					]
-				: [
-						`Already the same on both sides: ${summary.same} files.`,
-						`Only in this vault, to upload: ${summary.upload}.`,
-						`Only on ${this.host.name}, to download: ${summary.download}.`,
-					];
-			const ok = await confirm(
-				this.app,
-				`Start syncing with ${this.repoLabel}?`,
-				lines,
-				"Start syncing",
-			);
-			if (!ok) return;
-		}
-		this.device.started = true;
-		this.device.firstSync = firstSync;
-		this.saveDevice();
-		this.reschedule();
-		await this.syncNow("manual");
-	}
-
-	// a URL reads long in a sentence, so another git server is named by its path
 	get repoLabel(): string {
-		const repo = this.device.repo ?? "";
-		if (this.device.provider !== "other") return repo;
-		try {
-			return new URL(repo).pathname.replace(/^\/+|\.git$/g, "") || repo;
-		} catch {
-			return repo;
-		}
+		return repoLabelOf(this.device.provider, this.device.repo ?? "");
+	}
+
+	// "Syncing with me/notes on GitLab", for the settings, the status bar menu and the ribbon
+	connectionLabel(): string {
+		return this.device.started
+			? `Syncing with ${this.repoLabel} on ${this.host.name}`
+			: "Not connected";
+	}
+
+	// the status dot in the settings: the same reading as the ribbon's colour
+	health(): "off" | "ok" | "warning" | "error" {
+		if (!this.device.started) return "off";
+		if (this.status.kind === "error" || this.blocked !== null) return "error";
+		if (
+			!this.ready() ||
+			this.status.kind === "paused" ||
+			this.status.kind === "offline" ||
+			this.conflictCount() > 0
+		)
+			return "warning";
+		return "ok";
 	}
 
 	async disconnect(): Promise<void> {
+		this.draft = null;
 		this.app.secretStorage.setSecret(this.tokenId, "");
 		this.device = {
 			provider: this.device.provider,
@@ -1104,22 +1274,21 @@ export default class EasyGitSync extends Plugin {
 			this.statusEl.empty();
 			setIcon(this.statusEl.createSpan({ cls: "easy-git-sync-status-icon" }), icon);
 			this.statusEl.createSpan({ text });
-			this.statusEl.setAttr("aria-label", this.statusDescription());
+			this.statusEl.setAttr("aria-label", `${this.connectionLabel()}. ${this.statusDescription()}`);
 			this.statusEl.toggleClass("is-syncing", s.kind === "syncing");
 		}
 		if (this.ribbonEl) {
 			this.ribbonEl.toggleClass("is-syncing", s.kind === "syncing");
 			this.ribbonEl.toggleClass("has-problem", s.kind === "error" || this.blocked !== null);
 			this.ribbonEl.toggleClass("has-conflicts", conflicts > 0);
-			this.ribbonEl.setAttr(
-				"aria-label",
-				`Sync with ${this.host.name}. ${this.statusDescription()}`,
-			);
+			this.ribbonEl.setAttr("aria-label", `${this.connectionLabel()}. ${this.statusDescription()}`);
 		}
+		this.settingTab?.refreshConnection();
 	}
 
 	private showMenu(event: MouseEvent): void {
 		const menu = new Menu();
+		menu.addItem((item) => item.setTitle(this.connectionLabel()).setIsLabel(true));
 		menu.addItem((item) => item.setTitle(this.statusDescription()).setIsLabel(true));
 		menu.addItem((item) =>
 			item
@@ -1170,6 +1339,33 @@ function readOnly(provider: Host["id"], repo: string): string {
 			return `the token can read ${repo} but not write to it. Give it "Read and write" on repository, and check that you can push to it.`;
 		case "other":
 			return `the login can read ${repo} but not write to it.`;
+	}
+}
+
+function connectionOf({ provider, server, username }: Connection): Connection {
+	return { provider, server, username };
+}
+
+// GitHub's targets keep their old form, so an existing state stays valid
+function targetOf(t: {
+	provider: ProviderId;
+	server: string;
+	repo: string | null;
+	branch: string;
+}) {
+	const { provider, server, repo, branch } = t;
+	if (provider === "github") return `${repo}@${branch}`;
+	const where = provider === "other" ? "" : `${server.replace(/^https?:\/\//, "")}/`;
+	return `${provider}:${where}${repo}@${branch}`;
+}
+
+// a URL reads long in a sentence, so another git server is named by its path
+function repoLabelOf(provider: ProviderId, repo: string): string {
+	if (provider !== "other") return repo;
+	try {
+		return new URL(repo).pathname.replace(/^\/+|\.git$/g, "") || repo;
+	} catch {
+		return repo;
 	}
 }
 
