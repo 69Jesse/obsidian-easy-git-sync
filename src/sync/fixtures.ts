@@ -325,8 +325,8 @@ export class Device {
 			fs: this.fs,
 			remote: this.remote,
 			device: this.name,
-			stateFile: ".obsidian/plugins/easy-git-sync/state.json",
-			configDir: ".obsidian",
+			stateFile: ".config/plugins/easy-git-sync/state.json",
+			configDir: ".config",
 			saveState: async (state) => {
 				this.state = state;
 			},

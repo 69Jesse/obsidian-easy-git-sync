@@ -25,24 +25,24 @@ describe("first sync", () => {
 		const remote = new MemoryRemote();
 		const mac = new Device("MacBook", remote);
 		mac.fs.set("a.md", "hello\n");
-		mac.fs.set(".obsidian/app.json", "{}\n");
+		mac.fs.set(".config/app.json", "{}\n");
 		const report = await mac.sync();
 		expect(report.initialized).toBe(true);
 		const snap = remote.snapshot();
-		expect(Object.keys(snap).sort()).toEqual([GITIGNORE, ".obsidian/app.json", "a.md"]);
-		expect(snap[GITIGNORE]).toContain(".obsidian/workspace.json");
+		expect(Object.keys(snap).sort()).toEqual([".config/app.json", GITIGNORE, "a.md"]);
+		expect(snap[GITIGNORE]).toContain(".config/workspace.json");
 		expect(mac.fs.get(GITIGNORE)).toBe(snap[GITIGNORE]);
 		expect(remote.commits.get(remote.headSha ?? "")?.message).toMatch(
-			/^MacBook: \.obsidian\/app\.json, a\.md\n\nSynced-From: MacBook$/,
+			/^MacBook: \.config\/app\.json, a\.md\n\nSynced-From: MacBook$/,
 		);
 	});
 
 	it("counts a vault with only config files as having no notes", async () => {
 		const remote = new MemoryRemote();
-		await remote.pushDirect({ "a.md": "a\n", ".obsidian/app.json": "{}\n" });
+		await remote.pushDirect({ "a.md": "a\n", ".config/app.json": "{}\n" });
 		const phone = new Device("iPhone", remote);
-		phone.fs.set(".obsidian/app.json", '{"theme":"dark"}\n');
-		phone.fs.set(".obsidian/plugins/easy-git-sync/main.js", "plugin\n");
+		phone.fs.set(".config/app.json", '{"theme":"dark"}\n');
+		phone.fs.set(".config/plugins/easy-git-sync/main.js", "plugin\n");
 		expect((await phone.preview()).notes).toEqual({ here: 0, there: 1, differ: 1 });
 	});
 
@@ -59,8 +59,8 @@ describe("first sync", () => {
 		const remote = new MemoryRemote();
 		const mac = new Device("MacBook", remote);
 		mac.fs.set("a.md", "a\n");
-		mac.fs.set(".obsidian/app.json", "{}\n");
-		mac.fs.set(".obsidian/workspace.json", "{}\n");
+		mac.fs.set(".config/app.json", "{}\n");
+		mac.fs.set(".config/workspace.json", "{}\n");
 		const { upload } = await mac.preview();
 		await mac.sync();
 		expect(upload).toBe(Object.keys(remote.snapshot()).length);
@@ -260,7 +260,7 @@ describe("first sync of a vault that already has notes", () => {
 		phone.fs.set("shared.md", "local\n");
 		phone.fs.set("l.md", "l\n");
 		phone.fs.set("ignored.md", "never\n");
-		phone.fs.set(".obsidian/plugins/easy-git-sync/main.js", "plugin\n");
+		phone.fs.set(".config/plugins/easy-git-sync/main.js", "plugin\n");
 		return { remote, phone };
 	}
 
@@ -269,7 +269,7 @@ describe("first sync of a vault that already has notes", () => {
 		await phone.sync({ firstSync: "use-remote" });
 		expect(phone.fs.text()).toEqual({
 			".gitignore": "ignored.md\n",
-			".obsidian/plugins/easy-git-sync/main.js": "plugin\n",
+			".config/plugins/easy-git-sync/main.js": "plugin\n",
 			"ignored.md": "never\n",
 			"r.md": "r\n",
 			"shared.md": "remote\n",
@@ -277,7 +277,7 @@ describe("first sync of a vault that already has notes", () => {
 		expect(phone.fs.trash).toEqual(["l.md"]);
 		expect(new TextDecoder().decode(phone.fs.backups.get("shared.md"))).toBe("local\n");
 		// the plugin's own folder is never deleted, it goes up instead
-		expect(remote.snapshot()[".obsidian/plugins/easy-git-sync/main.js"]).toBe("plugin\n");
+		expect(remote.snapshot()[".config/plugins/easy-git-sync/main.js"]).toBe("plugin\n");
 	});
 
 	it("can make GitHub's a copy of this vault, in one commit", async () => {
@@ -286,7 +286,7 @@ describe("first sync of a vault that already has notes", () => {
 		await phone.sync({ firstSync: "use-local" });
 		expect(remote.snapshot()).toEqual({
 			".gitignore": "ignored.md\n",
-			".obsidian/plugins/easy-git-sync/main.js": "plugin\n",
+			".config/plugins/easy-git-sync/main.js": "plugin\n",
 			"l.md": "l\n",
 			"shared.md": "local\n",
 		});
@@ -432,7 +432,7 @@ describe(".gitignore", () => {
 		mac.fs.set("x.log", "x\n");
 		mac.fs.set("tracked.log", "new\n");
 		mac.fs.set(".git/HEAD", "ref\n");
-		mac.fs.set(".obsidian/plugins/easy-git-sync/state.json", "{}\n");
+		mac.fs.set(".config/plugins/easy-git-sync/state.json", "{}\n");
 		mac.fs.set(".trash/old.md", "t\n");
 		await mac.sync();
 		expect(remote.snapshot()).toEqual({ ".gitignore": "secret/\n*.log\n", "tracked.log": "new\n" });
