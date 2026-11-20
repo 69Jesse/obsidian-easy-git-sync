@@ -163,10 +163,10 @@ export class GitHubClient {
 	private async tokenCanPush(repo: GitHubRepo): Promise<boolean> {
 		if (!repo.canPush || !this.token()?.startsWith("github_pat_")) return repo.canPush;
 		// permissions.push is the user's role, not the token's, so try a ref to the zero sha:
-		// 403 without write access, 422 (or 409 on an empty repository) with it
+		// 403 without write access, 422 (or 409 on an empty repository) with it, 451 if GitHub blocked it
 		const response = await this.request("POST", `/repos/${repo.fullName}/git/refs`, {
 			body: { ref: "refs/heads/easy-git-sync-write-check", sha: "0".repeat(40) },
-			allow: [403, 404, 409, 422],
+			allow: [403, 404, 409, 422, 451],
 		});
 		// a rate-limited 403 must not read as read-only
 		if (response.status === 403 && toError(response).kind === "rate-limit") throw toError(response);
@@ -194,6 +194,7 @@ interface RawRepo {
 	private: boolean;
 	default_branch: string | null;
 	permissions?: { push?: boolean };
+	disabled?: boolean;
 	size: number;
 	pushed_at: string | null;
 }
@@ -205,7 +206,7 @@ function toRepo(raw: RawRepo): GitHubRepo {
 		fullName: raw.full_name,
 		private: raw.private,
 		defaultBranch: raw.default_branch || "main",
-		canPush: raw.permissions?.push ?? false,
+		canPush: !raw.disabled && (raw.permissions?.push ?? false),
 		empty: raw.size === 0 && raw.pushed_at === null,
 	};
 }
