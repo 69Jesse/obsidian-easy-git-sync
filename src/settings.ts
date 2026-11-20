@@ -24,21 +24,15 @@ export interface EasyGitSyncSettings {
 	// both in seconds, 0 is only on demand
 	syncAfterEdit: number;
 	checkInterval: number;
-	commitAsAccount: boolean;
 	conflicts: ConflictStrategy;
 }
 
 // only known keys are kept, so a removed setting drops out of data.json on the next save
 export function parseSettings(saved: Partial<EasyGitSyncSettings> | null): EasyGitSyncSettings {
-	const { syncAfterEdit, checkInterval, commitAsAccount, conflicts } = Object.assign(
-		{},
-		DEFAULT_SETTINGS,
-		saved,
-	);
+	const { syncAfterEdit, checkInterval, conflicts } = Object.assign({}, DEFAULT_SETTINGS, saved);
 	return {
 		syncAfterEdit,
 		checkInterval,
-		commitAsAccount,
 		conflicts: conflicts === "newest" ? "newest" : "keep-both",
 	};
 }
@@ -46,7 +40,6 @@ export function parseSettings(saved: Partial<EasyGitSyncSettings> | null): EasyG
 export const DEFAULT_SETTINGS: EasyGitSyncSettings = {
 	syncAfterEdit: 30,
 	checkInterval: 60,
-	commitAsAccount: true,
 	conflicts: "keep-both",
 };
 
@@ -161,14 +154,6 @@ const TOKEN_PLACEHOLDER: Record<ProviderId, string> = {
 	other: "",
 };
 
-const LINK_HELP: Partial<Record<ProviderId, string>> = {
-	github: "Turn this off to keep syncs off your contribution graph.",
-	gitlab:
-		"Commits use your private GitLab commit address. Turn this off to keep syncs off your activity.",
-	forgejo:
-		"Commits use your account's no-reply address. Turn this off to keep syncs off your activity.",
-};
-
 // how the settings name the host: GitHub, GitLab at git.example.com, Codeberg, or the server's address
 function whereOf(device: DeviceSettings): string {
 	const hostOf = (url: string) => {
@@ -222,7 +207,6 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		const host = plugin.host;
 		// not connected, the setup is the draft: there is nothing live to keep apart from it
 		if (!plugin.device.started) plugin.beginDraft();
-		const linkHelp = LINK_HELP[host.id];
 		return [
 			{
 				type: "group",
@@ -259,15 +243,6 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 						name: "Resolve all conflicts",
 						visible: () => plugin.conflictCount() > 0,
 						render: (setting) => this.renderResolve(setting),
-					},
-					// synced, so it stays put when this device uses a host that cannot link commits
-					{
-						name: host.name.startsWith("the ")
-							? `Link commits to your account on ${host.name}`
-							: `Link commits to your ${host.name} account`,
-						desc: linkHelp ?? "",
-						visible: host.linksAccounts && linkHelp !== undefined,
-						control: { type: "toggle", key: "commitAsAccount" },
 					},
 				],
 			},
@@ -313,9 +288,6 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 				break;
 			case "conflicts":
 				plugin.settings.conflicts = value === "newest" ? "newest" : "keep-both";
-				break;
-			case "commitAsAccount":
-				plugin.settings.commitAsAccount = value === true;
 				break;
 			case "deviceName":
 				plugin.device.deviceName = String(value).trim() || defaultDeviceName();

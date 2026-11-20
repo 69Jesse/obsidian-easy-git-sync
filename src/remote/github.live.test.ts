@@ -80,33 +80,6 @@ describe.skipIf(!token || !repo)("GitHub, live", () => {
 		},
 	);
 
-	it("commits off the account under an address GitHub cannot link", async () => {
-		const anonymous = new GitHubRemote(client, repo ?? "", "main", false);
-		const head = await anonymous.head();
-		if (head === null) return;
-		const { tree } = await anonymous.readTree(head);
-		const path = `${dir}-author.md`;
-		const made = await anonymous.commit({
-			parent: head,
-			baseTree: tree,
-			changes: [{ path, mode: "100644", read: async () => new TextEncoder().encode("hi\n") }],
-			message: "Live test: commit off the account",
-		});
-		if (made === "moved") throw new Error("the branch moved during the test");
-		const commit = await client.json<{
-			author: { email: string };
-			committer: { email: string };
-		}>("GET", `/repos/${repo}/git/commits/${made.commit}`);
-		expect(commit.author.email).toMatch(/@easy-git-sync\.invalid$/);
-		expect(commit.committer.email).toBe(commit.author.email);
-		await anonymous.commit({
-			parent: made.commit,
-			baseTree: made.tree,
-			changes: [{ path, mode: "100644", read: null }],
-			message: "Live test: clean up",
-		});
-	});
-
 	it("syncs two devices through GitHub, merging and conflicting", {
 		timeout: 120_000,
 	}, async () => {

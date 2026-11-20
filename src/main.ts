@@ -436,7 +436,7 @@ export default class EasyGitSync extends Plugin {
 		const repo = draft.repo ?? "";
 		const label = repoLabelOf(draft.provider, repo);
 		const target = targetOf(draft);
-		const remote = host.remote(repo, draft.branch, this.settings.commitAsAccount, null);
+		const remote = host.remote(repo, draft.branch, null);
 		const compare = (state: SyncState) =>
 			preview(state, {
 				fs: this.fs,
@@ -664,12 +664,7 @@ export default class EasyGitSync extends Plugin {
 
 	remote() {
 		return this.device.repo
-			? this.host.remote(
-					this.device.repo,
-					this.device.branch,
-					this.settings.commitAsAccount,
-					this.keptStash(),
-				)
+			? this.host.remote(this.device.repo, this.device.branch, this.keptStash())
 			: null;
 	}
 

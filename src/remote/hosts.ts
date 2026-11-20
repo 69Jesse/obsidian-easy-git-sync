@@ -45,15 +45,13 @@ export interface Host {
 	readonly id: ProviderId;
 	// how texts name it: GitLab, Codeberg, or "the server" when it has no name of its own
 	readonly name: string;
-	// whether commits can show on the account, through an address only that account owns
-	readonly linksAccounts: boolean;
 	account(): Promise<Account>;
 	repos(): Promise<RepoInfo[]>;
 	repo(fullName: string): Promise<RepoInfo>;
 	branches(fullName: string, defaultBranch: string): Promise<string[]>;
 	tokenExpiry(): Promise<Date | null>;
 	tokenUrl(): Promise<string | null>;
-	remote(fullName: string, branch: string, asAccount: boolean, stash: BlobStash | null): Remote;
+	remote(fullName: string, branch: string, stash: BlobStash | null): Remote;
 	cloneUrl(fullName: string): string;
 	gitLogin(): GitAuth | null;
 	fileUrl(fullName: string, branch: string, path: string): string | null;
@@ -112,7 +110,6 @@ export function createHost(connection: Connection, deps: HostDeps): Host {
 abstract class GitHost implements Host {
 	abstract readonly id: ProviderId;
 	abstract readonly name: string;
-	abstract readonly linksAccounts: boolean;
 	private cached: { token: string | null; account: Promise<Account> } | null = null;
 
 	constructor(protected readonly deps: HostDeps) {}
@@ -125,7 +122,7 @@ abstract class GitHost implements Host {
 	abstract fileUrl(fullName: string, branch: string, path: string): string | null;
 	abstract tokenUrl(): Promise<string | null>;
 
-	// for an address on commits when they are linked to the account
+	// an address only this account owns, so commits show on it; null where the host has none
 	protected linkedEmail(_account: Account): string | null {
 		return null;
 	}
@@ -174,10 +171,10 @@ abstract class GitHost implements Host {
 		};
 	}
 
-	remote(fullName: string, branch: string, asAccount: boolean, stash: BlobStash | null): Remote {
+	remote(fullName: string, branch: string, stash: BlobStash | null): Remote {
 		const identity = async (): Promise<Identity> => {
 			const account = await this.account();
-			const linked = asAccount && this.linksAccounts ? this.linkedEmail(account) : null;
+			const linked = this.linkedEmail(account);
 			// .invalid is reserved (RFC 2606), so no account can ever verify the address
 			return {
 				name: account.name || account.login,
@@ -240,7 +237,6 @@ abstract class GitHost implements Host {
 class GitHubHost implements Host {
 	readonly id = "github";
 	readonly name = "GitHub";
-	readonly linksAccounts = true;
 	readonly client: GitHubClient;
 
 	constructor(private readonly deps: HostDeps) {
@@ -277,8 +273,8 @@ class GitHubHost implements Host {
 		}).toString()}`;
 	}
 
-	remote(fullName: string, branch: string, asAccount: boolean): Remote {
-		return new GitHubRemote(this.client, fullName, branch, asAccount);
+	remote(fullName: string, branch: string): Remote {
+		return new GitHubRemote(this.client, fullName, branch);
 	}
 
 	cloneUrl(fullName: string): string {
@@ -305,7 +301,6 @@ interface GitLabProject {
 class GitLabHost extends GitHost {
 	readonly id = "gitlab";
 	readonly name = "GitLab";
-	readonly linksAccounts = true;
 	private readonly server: string;
 	private userId = 0;
 
@@ -415,7 +410,6 @@ interface ForgejoRepo {
 class ForgejoHost extends GitHost {
 	readonly id = "forgejo";
 	readonly name: string;
-	readonly linksAccounts = true;
 	private readonly server: string;
 	private login: string | null = null;
 
@@ -508,7 +502,6 @@ class ForgejoHost extends GitHost {
 class BitbucketHost extends GitHost {
 	readonly id = "bitbucket";
 	readonly name = "Bitbucket";
-	readonly linksAccounts = false;
 
 	private get headers(): Record<string, string> {
 		const token = this.deps.token();
@@ -598,7 +591,6 @@ class BitbucketHost extends GitHost {
 class OtherHost extends GitHost {
 	readonly id = "other";
 	readonly name = "the server";
-	readonly linksAccounts = false;
 
 	constructor(
 		private readonly connection: Connection,

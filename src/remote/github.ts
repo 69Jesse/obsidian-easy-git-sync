@@ -270,7 +270,6 @@ export class GitHubRemote implements Remote {
 		private readonly client: GitHubClient,
 		readonly fullName: string,
 		readonly branch: string,
-		private readonly asAccount = true,
 	) {}
 
 	private get repoPath(): string {
@@ -280,15 +279,10 @@ export class GitHubRemote implements Remote {
 	private async author(
 		authored: Date | null = null,
 	): Promise<{ author?: Identity; committer?: Identity }> {
-		if (this.asAccount && authored === null) return {};
+		if (authored === null) return {};
 		const user = await this.client.cachedUser();
 		const name = user.name || user.login;
-		// .invalid is reserved (RFC 2606), so no account can ever verify the address
-		const email = this.asAccount
-			? `${user.id}+${user.login}@users.noreply.github.com`
-			: `${user.login.toLowerCase()}@easy-git-sync.invalid`;
-		// both fields, or the contents API fills the committer in as the account
-		if (authored === null) return { author: { name, email }, committer: { name, email } };
+		const email = `${user.id}+${user.login}@users.noreply.github.com`;
 		return {
 			author: { name, email, date: isoDate(authored) },
 			committer: { name, email, date: isoDate(new Date()) },

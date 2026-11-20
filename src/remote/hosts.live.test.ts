@@ -222,8 +222,8 @@ describe.each(targets)("$label, live", { timeout: 120_000 }, (target) => {
 	});
 
 	it("syncs two devices, merges, and keeps a losing version as a second parent", async () => {
-		const mac = new LiveDevice("MacBook", host.remote(fullName, "main", true, null), host.name);
-		const phone = new LiveDevice("iPhone", host.remote(fullName, "main", true, null), host.name);
+		const mac = new LiveDevice("MacBook", host.remote(fullName, "main", null), host.name);
+		const phone = new LiveDevice("iPhone", host.remote(fullName, "main", null), host.name);
 		mac.fs.set("note.md", "one\ntwo\nthree\nfour\nfive\n");
 		mac.fs.set("attachments/pixel.png", new Uint8Array([137, 80, 78, 71, 0, 1, 2]));
 		const first = await mac.sync();
