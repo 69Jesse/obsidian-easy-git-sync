@@ -21,6 +21,7 @@ jobs:
       - name: Check the tag matches manifest.json
         run: test "$GITHUB_REF_NAME" = "$(node -p 'require("./manifest.json").version')"
       - run: npm ci
+      - run: npm run check
       - run: npm run build
       - uses: actions/attest-build-provenance@v2
         with:
