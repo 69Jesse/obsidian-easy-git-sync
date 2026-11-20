@@ -419,10 +419,10 @@ export default class EasyGitSync extends Plugin {
 				void this.syncNow("manual");
 				return true;
 			}
-			const firstSync = await this.confirmStart(draft, host);
-			if (firstSync === null || this.draft !== draft) return false;
+			const start = await this.confirmStart(draft, host);
+			if (start === null || this.draft !== draft) return false;
 			const account = await host.account().catch(() => null);
-			await this.applyDraft(draft, firstSync, account?.login);
+			await this.applyDraft(draft, start, account?.login);
 			void this.syncNow("manual");
 			return true;
 		} finally {
@@ -430,15 +430,15 @@ export default class EasyGitSync extends Plugin {
 		}
 	}
 
-	// the preview and the first-sync choice, against the draft and without touching the live sync
-	private async confirmStart(draft: Draft, host: Host): Promise<FirstSync | null> {
+	// the preview and the first-sync choice, against the draft and without touching the live sync;
+	// "resume" when this device synced with that target before and kept the history
+	private async confirmStart(draft: Draft, host: Host): Promise<FirstSync | "resume" | null> {
 		const repo = draft.repo ?? "";
 		const label = repoLabelOf(draft.provider, repo);
+		const target = targetOf(draft);
 		const remote = host.remote(repo, draft.branch, this.settings.commitAsAccount, null);
-		const notice = new Notice(`Easy Git Sync: comparing with ${host.name}...`, 0);
-		let summary: Awaited<ReturnType<typeof preview>>;
-		try {
-			summary = await preview(emptyState(targetOf(draft)), {
+		const compare = (state: SyncState) =>
+			preview(state, {
 				fs: this.fs,
 				remote,
 				device: this.device.deviceName,
@@ -448,6 +448,16 @@ export default class EasyGitSync extends Plugin {
 				remoteName: host.name,
 				saveState: async () => {},
 			});
+		const notice = new Notice(`Easy Git Sync: comparing with ${host.name}...`, 0);
+		let kept = (await this.readState(target))?.state ?? null;
+		let summary: Awaited<ReturnType<typeof preview>>;
+		try {
+			summary = await compare(kept ?? emptyState(target));
+			// emptied since: the kept history would read as everything deleted there, so start over
+			if (kept && summary.emptyRemote) {
+				kept = null;
+				summary = await compare(emptyState(target));
+			}
 		} catch (error) {
 			notice.hide();
 			new Notice(`Easy Git Sync: ${describe(error)}`);
@@ -457,6 +467,25 @@ export default class EasyGitSync extends Plugin {
 		const leaving = this.device.started
 			? `This device stops syncing with ${this.repoLabel} on ${this.host.name}.`
 			: null;
+		if (kept?.commit) {
+			const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+			const changes = [
+				summary.upload > 0 ? `${files(summary.upload)} to upload` : null,
+				summary.download > 0 ? `${files(summary.download)} to download` : null,
+				summary.merge > 0 ? `${files(summary.merge)} to merge` : null,
+				summary.deleteThere > 0 ? `${files(summary.deleteThere)} to delete on ${host.name}` : null,
+				summary.deleteHere > 0 ? `${files(summary.deleteHere)} to delete here` : null,
+			].filter((part) => part !== null);
+			const lines = [
+				"This device synced with it before, so it picks up where it left off.",
+				changes.length > 0
+					? `Changed since: ${changes.join(", ")}.`
+					: "Nothing changed on either side since.",
+			];
+			if (leaving) lines.push(leaving);
+			const ok = await confirm(this.app, `Start syncing with ${label}?`, lines, "Start syncing");
+			return ok ? "resume" : null;
+		}
 		const { notes } = summary;
 		// asked only when both sides have notes that differ: a fresh phone never offers to wipe the remote
 		if (!summary.emptyRemote && notes.here > 0 && notes.there > 0 && notes.differ > 0) {
@@ -483,10 +512,10 @@ export default class EasyGitSync extends Plugin {
 		return ok ? "merge" : null;
 	}
 
-	// a new target starts a fresh sync history; a new login keeps it
+	// a new target starts a fresh sync history, a resume reads the kept one, a new login keeps it
 	private async applyDraft(
 		draft: Draft,
-		firstSync: FirstSync | null,
+		start: FirstSync | "resume" | null,
 		account: string | undefined,
 	): Promise<void> {
 		// a sync that started meanwhile must finish against the target it read
@@ -498,7 +527,7 @@ export default class EasyGitSync extends Plugin {
 		}
 		const { firstSync: pending, account: before, ...device } = this.device;
 		// a new login for the same sync keeps the name it had if the lookup failed
-		const login = account ?? (firstSync === null ? before : undefined);
+		const login = account ?? (start === null ? before : undefined);
 		this.device = {
 			...device,
 			...connection,
@@ -507,8 +536,14 @@ export default class EasyGitSync extends Plugin {
 			started: true,
 			...(login ? { account: login } : {}),
 		};
-		if (firstSync !== null) {
-			this.device.firstSync = firstSync;
+		if (start === "resume") {
+			this.state = null;
+			this.savedState = null;
+			await this.loadState();
+			this.lockstep = undefined;
+			this.lastSynced = null;
+		} else if (start !== null) {
+			this.device.firstSync = start;
 			this.state = emptyState(this.target);
 			await this.saveState();
 			this.lockstep = undefined;
@@ -705,7 +740,10 @@ export default class EasyGitSync extends Plugin {
 		return "ok";
 	}
 
+	// the sync history stays on disk, so reconnecting to the same target picks up where it left off;
+	// connecting anywhere else replaces it
 	async disconnect(): Promise<void> {
+		while (this.running) await this.running.catch(() => {});
 		if (this.unloaded) return;
 		this.draft = null;
 		this.app.secretStorage.setSecret(this.tokenId, "");
@@ -721,9 +759,9 @@ export default class EasyGitSync extends Plugin {
 		this.saveDevice();
 		this.state = null;
 		this.savedState = null;
-		for (const path of [this.stateFile, `${this.stateFile}.tmp`]) {
-			if (await this.app.vault.adapter.exists(path)) await this.app.vault.adapter.remove(path);
-		}
+		this.lockstep = undefined;
+		this.lastSynced = null;
+		this.blocked = null;
 		this.reschedule();
 		this.render();
 	}
@@ -1235,23 +1273,29 @@ export default class EasyGitSync extends Plugin {
 
 	private async loadState(): Promise<SyncState> {
 		if (this.state?.target === this.target) return this.state;
-		let state = emptyState(this.target);
+		const saved = await this.readState(this.target);
+		this.savedState = saved?.json ?? null;
+		this.state = saved?.state ?? emptyState(this.target);
+		return this.state;
+	}
+
+	// the state on disk if it belongs to the target; the copy is read only when the file is unreadable
+	private async readState(
+		target: string,
+	): Promise<{ state: SyncState; json: string | null } | null> {
+		const adapter = this.app.vault.adapter;
 		for (const path of [this.stateFile, `${this.stateFile}.tmp`]) {
 			try {
-				if (!(await this.app.vault.adapter.exists(path))) continue;
-				const text = await this.app.vault.adapter.read(path);
+				if (!(await adapter.exists(path))) continue;
+				const text = await adapter.read(path);
 				const saved = JSON.parse(text) as SyncState;
-				if (saved.version === 1 && saved.target === this.target) {
-					state = saved;
-					this.savedState = path === this.stateFile ? text : null;
-				}
-				break;
+				if (saved.version !== 1 || saved.target !== target) return null;
+				return { state: saved, json: path === this.stateFile ? text : null };
 			} catch (error) {
 				warn(`reading ${path}`, error);
 			}
 		}
-		this.state = state;
-		return state;
+		return null;
 	}
 
 	// copy first: iOS can kill the app mid-write, and loading falls back to the copy

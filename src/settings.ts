@@ -413,7 +413,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		const login = plugin.device.provider === "other" ? "password" : "token";
 		setting
 			.setDesc(
-				`Forgets the ${login}, repository and sync history here. Your notes are not touched.`,
+				`Forgets the ${login} and repository here. Your notes are not touched, and reconnecting to the same repository picks up where it left off.`,
 			)
 			.addButton((button) =>
 				button
@@ -425,7 +425,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 							"Disconnect this device?",
 							[
 								plugin.device.started
-									? `This device stops syncing with ${plugin.repoLabel} and forgets its ${login} and sync history. Your notes are not touched.`
+									? `This device stops syncing with ${plugin.repoLabel} and forgets its ${login}. Your notes are not touched, and reconnecting to it later picks up where it left off.`
 									: `This device forgets its ${login}. Your notes are not touched.`,
 							],
 							"Disconnect",
