@@ -1,11 +1,12 @@
 import {
 	type App,
 	type ButtonComponent,
-	type DropdownComponent,
 	Notice,
 	Platform,
 	PluginSettingTab,
-	Setting,
+	type Setting,
+	type SettingDefinitionItem,
+	type SettingGroupItem,
 } from "obsidian";
 import type { default as EasyGitSync, Lookup } from "./main";
 import { confirm, RepoPickerModal } from "./modals";
@@ -86,32 +87,27 @@ export function defaultDeviceName(): string {
 	return Platform.isWin ? "Windows PC" : "Linux PC";
 }
 
-const SYNC_AFTER_EDIT: [string, string][] = [
-	["10", "10 seconds"],
-	["30", "30 seconds"],
-	["60", "1 minute"],
-	["300", "5 minutes"],
-	["0", "Only when I ask"],
-];
+// keys end in "s": a record puts integer-like keys first in numeric order, "Only when I ask" on top
+const SYNC_AFTER_EDIT: Record<string, string> = {
+	"10s": "10 seconds",
+	"30s": "30 seconds",
+	"60s": "1 minute",
+	"300s": "5 minutes",
+	"0s": "Only when I ask",
+};
 
-// in order: a record would sort its integer-like keys and put "Only when I ask" on top
-function addOptions(dropdown: DropdownComponent, options: [string, string][]): DropdownComponent {
-	for (const [value, label] of options) dropdown.addOption(value, label);
-	return dropdown;
-}
+const CHECK_INTERVAL: Record<string, string> = {
+	"30s": "30 seconds",
+	"60s": "1 minute",
+	"300s": "5 minutes",
+	"900s": "15 minutes",
+	"0s": "Only when I ask",
+};
 
 const CONFLICTS: Record<ConflictStrategy, string> = {
 	"keep-both": "Keep both, marked",
 	newest: "Keep the newer version",
 };
-
-const CHECK_INTERVAL: [string, string][] = [
-	["30", "30 seconds"],
-	["60", "1 minute"],
-	["300", "5 minutes"],
-	["900", "15 minutes"],
-	["0", "Only when I ask"],
-];
 
 // text and code alternate: every second part is a name exactly as that host's token form shows it
 const TOKEN_HELP: Record<Exclude<ProviderId, "other">, string[]> = {
@@ -204,6 +200,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 	private draftOpen = false;
 	// a token's access can grow without the token changing, so showing the fields asks again
 	private revalidate = true;
+	private tokenSetting: Setting | null = null;
 	private accountLine: HTMLElement | null = null;
 	private chooseButton: ButtonComponent | null = null;
 	private repoSetting: Setting | null = null;
@@ -220,28 +217,131 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
-	override display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-		this.chooseButton = null;
-		this.repoSetting = null;
-		this.commitButton = null;
-		this.hintEl = null;
-		this.accountLine = null;
+	override getSettingDefinitions(): SettingDefinitionItem[] {
 		const plugin = this.plugin;
+		const host = plugin.host;
+		// not connected, the setup is the draft: there is nothing live to keep apart from it
+		if (!plugin.device.started) plugin.beginDraft();
+		const linkHelp = LINK_HELP[host.id];
+		return [
+			{
+				type: "group",
+				heading: "Connection",
+				items: [
+					{
+						name: "Connection",
+						aliases: ["Sync now", "Change connection", "Repository", "Account"],
+						render: (setting) => this.renderConnection(setting),
+					},
+					...this.draftItems(),
+				],
+			},
+			{
+				type: "group",
+				heading: "Syncing",
+				items: [
+					{
+						name: "Sync after editing",
+						desc: "How long after you stop typing to upload changes.",
+						control: { type: "dropdown", key: "syncAfterEdit", options: SYNC_AFTER_EDIT },
+					},
+					{
+						name: "Check for changes",
+						desc: "How often to look for changes from other devices. It also looks on startup and when you return to Obsidian.",
+						control: { type: "dropdown", key: "checkInterval", options: CHECK_INTERVAL },
+					},
+					{
+						name: "Merge conflicts",
+						desc: `When a note changed in the same place on two devices. Changes in different places always merge, and the version not kept stays in ${host.name}'s history.`,
+						control: { type: "dropdown", key: "conflicts", options: CONFLICTS },
+					},
+					{
+						name: "Resolve all conflicts",
+						visible: () => plugin.conflictCount() > 0,
+						render: (setting) => this.renderResolve(setting),
+					},
+					// synced, so it stays put when this device uses a host that cannot link commits
+					{
+						name: host.name.startsWith("the ")
+							? `Link commits to your account on ${host.name}`
+							: `Link commits to your ${host.name} account`,
+						desc: linkHelp ?? "",
+						visible: host.linksAccounts && linkHelp !== undefined,
+						control: { type: "toggle", key: "commitAsAccount" },
+					},
+				],
+			},
+			{
+				type: "group",
+				heading: "This device",
+				items: [
+					{
+						name: "This device's name",
+						desc: "Used in commits and conflict blocks.",
+						control: { type: "text", key: "deviceName" },
+					},
+					{
+						name: "Disconnect this device",
+						visible: () => plugin.device.started || plugin.hasToken(),
+						render: (setting) => this.renderDisconnect(setting),
+					},
+				],
+			},
+		];
+	}
 
-		if (plugin.otherGitPluginEnabled()) {
-			const warning = containerEl.createDiv({ cls: "easy-git-sync-warning" });
-			warning.setText(
-				"Paused while the Git plugin is on: two plugins syncing one vault would fight. Turn it off on this device to sync.",
-			);
+	// the dropdowns hold "30s" for 30, and the device name lives in device settings
+	override getControlValue(key: string): unknown {
+		const { settings, device } = this.plugin;
+		switch (key) {
+			case "syncAfterEdit":
+			case "checkInterval":
+				return `${settings[key]}s`;
+			case "deviceName":
+				return device.deviceName;
+			default:
+				return settings[key as keyof EasyGitSyncSettings];
 		}
+	}
 
-		new Setting(containerEl).setName("Connection").setHeading();
-		const row = new Setting(containerEl);
-		this.connectionSetting = row;
+	override async setControlValue(key: string, value: unknown): Promise<void> {
+		const plugin = this.plugin;
+		switch (key) {
+			case "syncAfterEdit":
+			case "checkInterval":
+				plugin.settings[key] = Number.parseInt(String(value), 10) || 0;
+				break;
+			case "conflicts":
+				plugin.settings.conflicts = value === "newest" ? "newest" : "keep-both";
+				break;
+			case "commitAsAccount":
+				plugin.settings.commitAsAccount = value === true;
+				break;
+			case "deviceName":
+				plugin.device.deviceName = String(value).trim() || defaultDeviceName();
+				plugin.saveDevice();
+				return;
+			default:
+				return;
+		}
+		await plugin.saveSettings();
+		if (key === "checkInterval") plugin.reschedule();
+	}
+
+	override hide(): void {
+		const folding = this.draftOpen;
+		this.draftOpen = false;
+		this.revalidate = true;
+		super.hide();
+		// reopening renders the definitions of the last update(), draft rows included
+		if (folding) this.update();
+	}
+
+	private renderConnection(setting: Setting): void {
+		const plugin = this.plugin;
+		this.connectionSetting = setting;
 		if (plugin.device.started) {
-			row
+			setting
 				.addButton((button) =>
 					button
 						.setButtonText(this.draftOpen && plugin.draft ? "Cancel change" : "Change connection")
@@ -254,7 +354,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 								this.draftOpen = true;
 								this.revalidate = true;
 							}
-							this.display();
+							this.update();
 						}),
 				)
 				.addButton((button) =>
@@ -263,139 +363,6 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		}
 		this.refreshConnection();
 		void plugin.refreshAccount();
-
-		// not connected, the setup is the draft: there is nothing live to keep apart from it
-		if (!plugin.device.started) plugin.beginDraft();
-		if (plugin.draft && (this.draftOpen || !plugin.device.started)) this.displayDraft(containerEl);
-
-		const host = plugin.host;
-		new Setting(containerEl).setName("Syncing").setHeading();
-
-		new Setting(containerEl)
-			.setName("Sync after editing")
-			.setDesc("How long after you stop typing to upload changes.")
-			.addDropdown((dropdown) =>
-				addOptions(dropdown, SYNC_AFTER_EDIT)
-					.setValue(String(plugin.settings.syncAfterEdit))
-					.onChange(async (value) => {
-						plugin.settings.syncAfterEdit = Number(value);
-						await plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Check for changes")
-			.setDesc(
-				"How often to look for changes from other devices. It also looks on startup and when you return to Obsidian.",
-			)
-			.addDropdown((dropdown) =>
-				addOptions(dropdown, CHECK_INTERVAL)
-					.setValue(String(plugin.settings.checkInterval))
-					.onChange(async (value) => {
-						plugin.settings.checkInterval = Number(value);
-						await plugin.saveSettings();
-						plugin.reschedule();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Merge conflicts")
-			.setDesc(
-				`When a note changed in the same place on two devices. Changes in different places always merge, and the version not kept stays in ${host.name}'s history.`,
-			)
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOptions(CONFLICTS)
-					.setValue(plugin.settings.conflicts)
-					.onChange(async (value) => {
-						plugin.settings.conflicts = value === "newest" ? "newest" : "keep-both";
-						await plugin.saveSettings();
-					}),
-			);
-
-		const conflicts = plugin.conflictCount();
-		if (conflicts > 0) {
-			new Setting(containerEl)
-				.setName("Resolve all conflicts")
-				.setDesc(
-					conflicts === 1
-						? "1 note still has a conflict. Keep the newer version in it."
-						: `${conflicts} notes still have a conflict. Keep the newer version in every one of them.`,
-				)
-				.addButton((button) =>
-					button.setButtonText("Keep newer").onClick(async () => {
-						await plugin.resolveAllNewer();
-						this.display();
-					}),
-				);
-		}
-
-		// synced, so it stays put when this device uses a host that cannot link commits
-		const linkHelp = LINK_HELP[host.id];
-		if (host.linksAccounts && linkHelp) {
-			new Setting(containerEl)
-				.setName(
-					host.name.startsWith("the ")
-						? `Link commits to your account on ${host.name}`
-						: `Link commits to your ${host.name} account`,
-				)
-				.setDesc(linkHelp)
-				.addToggle((toggle) =>
-					toggle.setValue(plugin.settings.commitAsAccount).onChange(async (value) => {
-						plugin.settings.commitAsAccount = value;
-						await plugin.saveSettings();
-					}),
-				);
-		}
-
-		new Setting(containerEl).setName("This device").setHeading();
-
-		new Setting(containerEl)
-			.setName("This device's name")
-			.setDesc("Used in commits and conflict blocks.")
-			.addText((text) =>
-				text.setValue(plugin.device.deviceName).onChange((value) => {
-					plugin.device.deviceName = value.trim() || defaultDeviceName();
-					plugin.saveDevice();
-				}),
-			);
-
-		if (plugin.device.started || plugin.hasToken()) {
-			new Setting(containerEl)
-				.setName("Disconnect this device")
-				.setDesc(
-					`Forgets the ${plugin.device.provider === "other" ? "password" : "token"}, repository and sync history here. Your notes are not touched.`,
-				)
-				.addButton((button) =>
-					button
-						.setButtonText("Disconnect")
-						.setWarning()
-						.onClick(async () => {
-							const login = plugin.device.provider === "other" ? "password" : "token";
-							const ok = await confirm(
-								this.app,
-								"Disconnect this device?",
-								[
-									plugin.device.started
-										? `This device stops syncing with ${plugin.repoLabel} and forgets its ${login} and sync history. Your notes are not touched.`
-										: `This device forgets its ${login}. Your notes are not touched.`,
-								],
-								"Disconnect",
-								true,
-							);
-							if (!ok) return;
-							await plugin.disconnect();
-							new Notice("Easy Git Sync: this device is disconnected.");
-							this.display();
-						}),
-				);
-		}
-	}
-
-	override hide(): void {
-		this.draftOpen = false;
-		this.revalidate = true;
-		super.hide();
 	}
 
 	// what this device syncs with right now; redrawn on every status change while it is shown
@@ -409,7 +376,11 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		row.nameEl.appendText(device.started ? `Connected to ${plugin.repoLabel}` : "Not connected");
 		row.descEl.empty();
 		if (!device.started) {
-			row.descEl.setText("Fill in the connection below, then press Start syncing.");
+			row.descEl.setText(
+				plugin.otherGitPluginEnabled()
+					? "Turn off the Git plugin on this device first: two plugins syncing one vault would fight."
+					: "Fill in the connection below to start syncing.",
+			);
 			return;
 		}
 		const login =
@@ -420,79 +391,258 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		row.descEl.createDiv({ text: plugin.statusDescription() });
 	}
 
-	private displayDraft(containerEl: HTMLElement): void {
+	private renderResolve(setting: Setting): void {
 		const plugin = this.plugin;
-		const draft = plugin.draft;
-		if (!draft) return;
+		const conflicts = plugin.conflictCount();
+		setting
+			.setDesc(
+				conflicts === 1
+					? "1 note still has a conflict. Keep the newer version in it."
+					: `${conflicts} notes still have a conflict. Keep the newer version in every one of them.`,
+			)
+			.addButton((button) =>
+				button.setButtonText("Keep newer").onClick(async () => {
+					await plugin.resolveAllNewer();
+					this.update();
+				}),
+			);
+	}
 
-		new Setting(containerEl)
-			.setName("Provider")
-			.setDesc("Where the repository is.")
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOptions(PROVIDERS)
-					.setValue(draft.provider)
-					.onChange((value) => {
-						plugin.setDraftConnection({
-							provider: value as ProviderId,
-							server: "",
-							username: "",
-						});
-						this.display();
+	private renderDisconnect(setting: Setting): void {
+		const plugin = this.plugin;
+		const login = plugin.device.provider === "other" ? "password" : "token";
+		setting
+			.setDesc(
+				`Forgets the ${login}, repository and sync history here. Your notes are not touched.`,
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("Disconnect")
+					.setDestructive()
+					.onClick(async () => {
+						const ok = await confirm(
+							this.app,
+							"Disconnect this device?",
+							[
+								plugin.device.started
+									? `This device stops syncing with ${plugin.repoLabel} and forgets its ${login} and sync history. Your notes are not touched.`
+									: `This device forgets its ${login}. Your notes are not touched.`,
+							],
+							"Disconnect",
+							true,
+						);
+						if (!ok) return;
+						await plugin.disconnect();
+						new Notice("Easy Git Sync: this device is disconnected.");
+						this.update();
 					}),
 			);
+	}
 
+	// built from the draft as it is now; a change to its shape (provider, server) calls update()
+	private draftItems(): SettingGroupItem[] {
+		const plugin = this.plugin;
+		const draft = plugin.draft;
+		if (!draft || !(this.draftOpen || !plugin.device.started)) return [];
+		const items: SettingGroupItem[] = [
+			{
+				name: "Provider",
+				desc: "Where the repository is.",
+				render: (setting) => this.renderProvider(setting, draft),
+			},
+		];
 		if (draft.provider === "gitlab" || draft.provider === "forgejo") {
-			const fallback = DEFAULT_SERVERS[draft.provider] ?? "";
-			new Setting(containerEl)
-				.setName("Server")
-				.setDesc(
+			items.push({
+				name: "Server",
+				desc:
 					draft.provider === "gitlab"
 						? "Empty for gitlab.com, or the address of your own GitLab."
 						: "Empty for codeberg.org, or the address of your Forgejo or Gitea server.",
-				)
-				.addText((text) => {
-					text.setPlaceholder(fallback.replace(/^https:\/\//, "")).setValue(draft.server);
-					// applied once the field is left: a new server means a new token and repository
-					text.inputEl.addEventListener("change", () => {
-						const value = text.getValue().trim();
-						const server =
-							value && normalizeServer(value) !== fallback ? normalizeServer(value) : "";
-						plugin.setDraftConnection({ server });
-						this.display();
-					});
-				});
+				render: (setting) => this.renderServer(setting, draft),
+			});
 		}
-
 		if (draft.provider === "other") {
-			this.displayOther(containerEl, draft);
+			items.push(
+				{
+					name: "Username",
+					desc: "The login for the repository.",
+					render: (setting) => this.renderUsername(setting, draft),
+				},
+				{
+					name: "Password",
+					render: (setting) => this.renderPassword(setting, draft),
+				},
+				{
+					name: "Repository",
+					render: (setting) => this.renderAddress(setting, draft),
+				},
+			);
 		} else {
-			this.displayToken(containerEl, draft);
-			this.repoSetting = new Setting(containerEl)
-				.setName("Repository")
-				.setDesc(
-					draft.repo
-						? `${draft.repo}, branch ${draft.branch}.`
-						: "The repository this vault syncs with. It can be empty or already hold the vault.",
-				)
-				.addButton((button) => {
-					this.chooseButton = button;
-					button.setButtonText(draft.repo ? "Change" : "Choose").onClick(() => {
-						// a list older than a minute shows while a fresh one loads, for a repository just made
-						const fresh = plugin.draftLookup(60_000)?.then((found) => found.repos);
-						if (!fresh) return;
-						const cached = plugin.peekDraftLookup()?.repos ?? null;
-						new RepoPickerModal(this.app, cached, fresh, async (fullName) => {
-							if (await plugin.pickDraftRepo(fullName)) this.display();
-						}).open();
-					});
-				});
+			items.push(
+				{
+					name: "Access token",
+					render: (setting) => this.renderToken(setting, draft),
+				},
+				{
+					name: "Repository",
+					render: (setting) => this.renderRepository(setting, draft),
+				},
+			);
 		}
+		items.push({
+			name: "",
+			searchable: false,
+			render: (setting) => this.renderCommit(setting),
+		});
+		return items;
+	}
 
-		const footer = new Setting(containerEl);
-		footer.settingEl.addClass("easy-git-sync-draft-footer");
-		this.hintEl = footer.descEl;
-		footer.addButton((button) => {
+	private renderProvider(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		setting.addDropdown((dropdown) =>
+			dropdown
+				.addOptions(PROVIDERS)
+				.setValue(draft.provider)
+				.onChange((value) => {
+					plugin.setDraftConnection({ provider: value as ProviderId, server: "", username: "" });
+					this.update();
+				}),
+		);
+	}
+
+	private renderServer(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		const fallback = DEFAULT_SERVERS[draft.provider] ?? "";
+		setting.addText((text) => {
+			text.setPlaceholder(fallback.replace(/^https:\/\//, "")).setValue(draft.server);
+			// applied once the field is left: a new server means a new token and repository
+			text.inputEl.addEventListener("change", () => {
+				const value = text.getValue().trim();
+				const server = value && normalizeServer(value) !== fallback ? normalizeServer(value) : "";
+				plugin.setDraftConnection({ server });
+				this.update();
+			});
+		});
+	}
+
+	private renderToken(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		const host = plugin.draftHost();
+		if (!host) return;
+		const help = TOKEN_HELP[host.id as Exclude<ProviderId, "other">];
+		setting
+			.setDesc(
+				createFragment((desc) => {
+					help.forEach((part, i) => {
+						if (i % 2 === 1) desc.createEl("code", { text: part });
+						else desc.appendText(part);
+					});
+				}),
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
+				if (draft.token) text.setValue(draft.token);
+				text
+					.setPlaceholder(TOKEN_PLACEHOLDER[host.id])
+					.onChange((value) => this.onLoginTyped(value, true));
+			})
+			.addButton((button) =>
+				button
+					.setButtonText(
+						host.id === "bitbucket" ? "Create token on Atlassian" : `Create token on ${host.name}`,
+					)
+					.onClick(async () => {
+						const url = await host.tokenUrl();
+						if (url) window.open(url);
+					}),
+			);
+		// whether a token is saved goes in the description: a placeholder vanishes on paste
+		setting.settingEl.addClass("easy-git-sync-token-setting");
+		this.tokenSetting = setting;
+		this.accountLine = setting.descEl.createDiv();
+		void this.checkAccount();
+	}
+
+	private renderRepository(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		this.repoSetting = setting;
+		setting
+			.setDesc(
+				draft.repo
+					? `${draft.repo}, branch ${draft.branch}.`
+					: "The repository this vault syncs with. It can be empty or already hold the vault.",
+			)
+			.addButton((button) => {
+				this.chooseButton = button;
+				button.setButtonText(draft.repo ? "Change" : "Choose").onClick(() => {
+					// a list older than a minute shows while a fresh one loads, for a repository just made
+					const fresh = plugin.draftLookup(60_000)?.then((found) => found.repos);
+					if (!fresh) return;
+					const cached = plugin.peekDraftLookup()?.repos ?? null;
+					new RepoPickerModal(this.app, cached, fresh, async (fullName) => {
+						if (await plugin.pickDraftRepo(fullName)) this.update();
+					}).open();
+				});
+			});
+	}
+
+	// another git server: its address and a login, and no account to list repositories from
+	private renderUsername(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		setting.addText((text) => {
+			text.setValue(draft.username);
+			text.inputEl.autocomplete = "off";
+			text.inputEl.addEventListener("change", () => {
+				plugin.setDraftConnection({ username: text.getValue().trim() });
+				this.update();
+			});
+		});
+	}
+
+	private renderPassword(setting: Setting, draft: Draft): void {
+		setting
+			.setDesc(
+				"Its password, or an access token if the server issues them. Kept in this device's keychain, never synced.",
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
+				if (draft.token) text.setValue(draft.token);
+				text.onChange((value) => this.onLoginTyped(value, false));
+			});
+		this.accountLine = setting.descEl.createDiv();
+		this.showPasswordLine();
+	}
+
+	private renderAddress(setting: Setting, draft: Draft): void {
+		const plugin = this.plugin;
+		setting
+			.setDesc(
+				draft.repo && draft.checked
+					? `${draft.repo}, branch ${draft.branch}.`
+					: "Its address over HTTPS, as you would clone it. SSH addresses cannot work: phones cannot use SSH.",
+			)
+			.addText((text) => {
+				text.setPlaceholder("https://git.example.com/me/vault.git").setValue(draft.repo ?? "");
+				text.onChange((value) => {
+					const current = plugin.draft;
+					if (!current) return;
+					const url = value.trim();
+					if (url === current.repo) return;
+					current.repo = url || null;
+					// checked on Start syncing, which also asks for the branch when there are several
+					current.checked = false;
+					this.refreshDraft();
+				});
+			});
+	}
+
+	private renderCommit(setting: Setting): void {
+		const plugin = this.plugin;
+		setting.settingEl.addClass("easy-git-sync-draft-footer");
+		this.hintEl = setting.descEl;
+		setting.addButton((button) => {
 			this.commitButton = button;
 			button.setCta().onClick(async () => {
 				const current = plugin.draft;
@@ -502,7 +652,7 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 				}
 				button.setDisabled(true);
 				await plugin.commitDraft();
-				this.display();
+				this.update();
 			});
 		});
 		this.refreshDraft();
@@ -548,98 +698,6 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		}, 600);
 	}
 
-	private displayToken(panel: HTMLElement, draft: Draft): void {
-		const plugin = this.plugin;
-		const host = plugin.draftHost();
-		if (!host) return;
-		const help = TOKEN_HELP[host.id as Exclude<ProviderId, "other">];
-		const tokenSetting = new Setting(panel)
-			.setName("Access token")
-			.setDesc(
-				createFragment((desc) => {
-					help.forEach((part, i) => {
-						if (i % 2 === 1) desc.createEl("code", { text: part });
-						else desc.appendText(part);
-					});
-				}),
-			)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text.inputEl.autocomplete = "off";
-				if (draft.token) text.setValue(draft.token);
-				text
-					.setPlaceholder(TOKEN_PLACEHOLDER[host.id])
-					.onChange((value) => this.onLoginTyped(value, true));
-			})
-			.addButton((button) =>
-				button
-					.setButtonText(
-						host.id === "bitbucket" ? "Create token on Atlassian" : `Create token on ${host.name}`,
-					)
-					.onClick(async () => {
-						const url = await host.tokenUrl();
-						if (url) window.open(url);
-					}),
-			);
-		// whether a token is saved goes in the description: a placeholder vanishes on paste
-		tokenSetting.settingEl.addClass("easy-git-sync-token-setting");
-		this.accountLine = tokenSetting.descEl.createDiv({ cls: "easy-git-sync-account" });
-		void this.checkAccount();
-	}
-
-	// another git server: its address and a login, and no account to list repositories from
-	private displayOther(panel: HTMLElement, draft: Draft): void {
-		const plugin = this.plugin;
-		new Setting(panel)
-			.setName("Username")
-			.setDesc("The login for the repository.")
-			.addText((text) => {
-				text.setValue(draft.username);
-				text.inputEl.autocomplete = "off";
-				text.inputEl.addEventListener("change", () => {
-					plugin.setDraftConnection({ username: text.getValue().trim() });
-					this.display();
-				});
-			});
-		new Setting(panel)
-			.setName("Password")
-			.setDesc(
-				createFragment((desc) => {
-					desc.appendText(
-						"Its password, or an access token if the server issues them. Kept in this device's keychain, never synced.",
-					);
-					this.accountLine = desc.createDiv({ cls: "easy-git-sync-account" });
-				}),
-			)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text.inputEl.autocomplete = "off";
-				if (draft.token) text.setValue(draft.token);
-				text.onChange((value) => this.onLoginTyped(value, false));
-			});
-		this.showPasswordLine();
-		new Setting(panel)
-			.setName("Repository")
-			.setDesc(
-				draft.repo && draft.checked
-					? `${draft.repo}, branch ${draft.branch}.`
-					: "Its address over HTTPS, as you would clone it. SSH addresses cannot work: phones cannot use SSH.",
-			)
-			.addText((text) => {
-				text.setPlaceholder("https://git.example.com/me/vault.git").setValue(draft.repo ?? "");
-				text.onChange((value) => {
-					const current = plugin.draft;
-					if (!current) return;
-					const url = value.trim();
-					if (url === current.repo) return;
-					current.repo = url || null;
-					// checked on Start syncing, which also asks for the branch when there are several
-					current.checked = false;
-					this.refreshDraft();
-				});
-			});
-	}
-
 	private showPasswordLine(): void {
 		const line = this.accountLine;
 		if (!line) return;
@@ -655,10 +713,11 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 
 	private async checkAccount(): Promise<void> {
 		const line = this.accountLine;
+		const setting = this.tokenSetting;
 		const plugin = this.plugin;
 		const draft = plugin.draft;
-		const host = plugin.draftHost();
-		if (!line || !draft || !host) return;
+		if (!line || !setting || !draft || !plugin.draftHost()) return;
+		setting.setErrorMessage(null);
 		if (!plugin.draftHasLogin()) {
 			line.setText("");
 			return;
@@ -669,29 +728,25 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 		const maxAge = this.revalidate ? 0 : undefined;
 		this.revalidate = false;
 		const show = ({ account, repos, expiry }: Lookup) => {
-			line.removeClass("mod-warning");
 			const who = typed
 				? `The new token is for @${account.login}`
 				: `A token is saved for @${account.login}`;
 			// the same count the repository picker shows
 			const count = repos.filter((repo) => repo.canPush).length;
+			const until = expiry ? ` It expires on ${expiry.toLocaleDateString()}.` : "";
 			if (count === 0) {
-				line.setText(`${who}, but it cannot write to any repository.`);
-				line.addClass("mod-warning");
+				line.setText(`${who}.${until}`);
+				setting.setErrorMessage("It cannot write to any repository.");
 				return;
 			}
-			const until = expiry ? ` It expires on ${expiry.toLocaleDateString()}.` : "";
+			setting.setErrorMessage(null);
 			line.setText(
 				`${who}. ${count} ${count === 1 ? "repository" : "repositories"} available.${until}`,
 			);
 		};
 		const cached = plugin.peekDraftLookup();
-		if (cached) {
-			show(cached);
-		} else {
-			line.setText("Checking the token...");
-			line.removeClass("mod-warning");
-		}
+		if (cached) show(cached);
+		else line.setText("Checking the token...");
 		try {
 			const found = await plugin.draftLookup(maxAge);
 			if (!found || id !== this.checkId) return;
@@ -699,8 +754,8 @@ export class EasyGitSyncSettingTab extends PluginSettingTab {
 			await this.prefill(found);
 		} catch (error) {
 			if (id !== this.checkId) return;
-			line.setText(error instanceof Error ? error.message : String(error));
-			line.addClass("mod-warning");
+			line.setText("");
+			setting.setErrorMessage(error instanceof Error ? error.message : String(error));
 		}
 	}
 

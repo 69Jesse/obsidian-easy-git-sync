@@ -134,14 +134,6 @@ body {
 	border-top: none;
 }
 
-.easy-git-sync-warning {
-	padding: var(--size-4-3);
-	margin-bottom: var(--size-4-4);
-	border-radius: var(--radius-m);
-	background-color: rgba(var(--color-orange-rgb), 0.12);
-	color: var(--text-normal);
-}
-
 /* the field as wide as its button: `width: 0` keeps it out of the column's intrinsic width */
 .easy-git-sync-token-setting .setting-item-control {
 	flex: 0 0 auto;
@@ -153,15 +145,6 @@ body {
 .easy-git-sync-token-setting .setting-item-control input {
 	width: 0;
 	min-width: 100%;
-}
-
-.easy-git-sync-account {
-	margin-top: var(--size-4-1);
-	color: var(--text-accent);
-}
-
-.easy-git-sync-account.mod-warning {
-	color: var(--text-error);
 }
 
 .easy-git-sync-muted {

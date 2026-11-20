@@ -2,7 +2,7 @@
 	"id": "easy-git-sync",
 	"name": "Easy Git Sync",
 	"version": "1.0.3",
-	"minAppVersion": "1.11.4",
+	"minAppVersion": "1.13.0",
 	"description": "Easy, uncompromising Git sync for your vault, on desktop and mobile.",
 	"author": "69Jesse",
 	"authorUrl": "https://github.com/69Jesse",
