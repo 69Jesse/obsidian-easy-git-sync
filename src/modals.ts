@@ -1,4 +1,4 @@
-import { type App, Modal, Setting, SuggestModal } from "obsidian";
+import { type App, ConfirmationModal, Modal, Setting, SuggestModal } from "obsidian";
 import { capitalize } from "./lib/format";
 import type { RepoInfo } from "./remote/hosts";
 import type { FirstSync } from "./sync/engine";
@@ -105,34 +105,24 @@ export function confirm(
 	title: string,
 	body: string[],
 	action: string,
-	warning = false,
+	destructive = false,
 ): Promise<boolean> {
 	return new Promise((resolve) => {
-		const modal = new (class extends Modal {
-			private answered = false;
-			override onOpen(): void {
-				this.setTitle(title);
-				this.modalEl.addClass("easy-git-sync-modal");
-				for (const paragraph of body) this.contentEl.createEl("p", { text: paragraph });
-				const buttons = this.contentEl.createDiv({ cls: "modal-button-container" });
-				const yes = buttons.createEl("button", {
-					text: action,
-					cls: warning ? "mod-warning" : "mod-cta",
-				});
-				yes.addEventListener("click", () => {
-					this.answered = true;
-					resolve(true);
-					this.close();
-				});
-				buttons
-					.createEl("button", { text: "Cancel" })
-					.addEventListener("click", () => this.close());
-			}
+		// a button resolves first, so the close that follows it changes nothing
+		const modal = new (class extends ConfirmationModal {
 			override onClose(): void {
-				if (!this.answered) resolve(false);
-				this.contentEl.empty();
+				super.onClose();
+				resolve(false);
 			}
 		})(app);
+		modal.setTitle(title);
+		for (const paragraph of body) modal.contentEl.createEl("p", { text: paragraph });
+		modal.addButton((button) => {
+			button.setButtonText(action).onClick(() => resolve(true));
+			if (destructive) button.setDestructive();
+			else button.setCta();
+		});
+		modal.addCancelButton();
 		modal.open();
 	});
 }
@@ -172,7 +162,7 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 							this.close();
 						});
 						if (value === "merge") button.setCta();
-						else button.setWarning();
+						else button.setDestructive();
 					});
 				};
 				const changes = (replaced: number, deleted: number, where: string) =>

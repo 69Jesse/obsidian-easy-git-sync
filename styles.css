@@ -151,42 +151,6 @@ body {
 	color: var(--text-muted);
 }
 
-/* a modal's close button is `.modal-header-button`, `.modal-close-button` is the lightbox's */
-.easy-git-sync-modal .modal-header-button {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	width: var(--size-4-8);
-	height: var(--size-4-8);
-	background-color: transparent;
-	box-shadow: none;
-	color: var(--search-clear-button-color, var(--text-muted));
-}
-
-.easy-git-sync-modal .modal-header-button:hover {
-	background-color: transparent;
-	color: var(--text-normal);
-}
-
-.easy-git-sync-modal .modal-header-button svg {
-	display: none;
-}
-
-.easy-git-sync-modal .modal-header-button::after {
-	content: "";
-	display: block;
-	width: 17px;
-	height: 17px;
-	background-color: currentColor;
-	-webkit-mask-image: url("data:image/svg+xml,<svg viewBox=%270 0 12 12%27 fill=%27none%27 xmlns=%27http://www.w3.org/2000/svg%27%3E%3Cpath fill-rule=%27evenodd%27 clip-rule=%27evenodd%27 d=%27M6 12C9.31371 12 12 9.31371 12 6C12 2.68629 9.31371 0 6 0C2.68629 0 0 2.68629 0 6C0 9.31371 2.68629 12 6 12ZM3.8705 3.09766L6.00003 5.22718L8.12955 3.09766L8.9024 3.8705L6.77287 6.00003L8.9024 8.12955L8.12955 8.9024L6.00003 6.77287L3.8705 8.9024L3.09766 8.12955L5.22718 6.00003L3.09766 3.8705L3.8705 3.09766Z%27 fill=%27currentColor%27/></svg>");
-	-webkit-mask-repeat: no-repeat;
-	-webkit-mask-size: contain;
-	mask-image: url("data:image/svg+xml,<svg viewBox=%270 0 12 12%27 fill=%27none%27 xmlns=%27http://www.w3.org/2000/svg%27%3E%3Cpath fill-rule=%27evenodd%27 clip-rule=%27evenodd%27 d=%27M6 12C9.31371 12 12 9.31371 12 6C12 2.68629 9.31371 0 6 0C2.68629 0 0 2.68629 0 6C0 9.31371 2.68629 12 6 12ZM3.8705 3.09766L6.00003 5.22718L8.12955 3.09766L8.9024 3.8705L6.77287 6.00003L8.9024 8.12955L8.12955 8.9024L6.00003 6.77287L3.8705 8.9024L3.09766 8.12955L5.22718 6.00003L3.09766 3.8705L3.8705 3.09766Z%27 fill=%27currentColor%27/></svg>");
-	mask-repeat: no-repeat;
-	mask-size: contain;
-}
-
 /* the connection's state, as a dot in front of its name */
 .easy-git-sync-dot {
 	display: inline-block;
