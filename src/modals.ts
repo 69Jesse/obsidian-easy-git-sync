@@ -149,7 +149,7 @@ export function chooseFirstSync(app: App, s: FirstSyncSummary): Promise<FirstSyn
 				this.setTitle(`Start syncing with ${s.repo}`);
 				this.modalEl.addClass("easy-git-sync-modal");
 				this.contentEl.createEl("p", {
-					text: `Both have files. ${files(s.same)} are the same on both sides, ${files(s.upload)} only in this vault, ${files(s.download)} only on ${s.remote}, and ${files(s.merge)} differ.`,
+					text: `Both have files. ${files(s.same)} ${s.same === 1 ? "is" : "are"} the same on both sides, ${files(s.upload)} only in this vault, ${files(s.download)} only on ${s.remote}, and ${files(s.merge)} ${s.merge === 1 ? "differs" : "differ"}.`,
 				});
 				if (s.leaving) this.contentEl.createEl("p", { text: s.leaving });
 				const choice = (name: string, desc: string, action: string, value: FirstSync) => {
