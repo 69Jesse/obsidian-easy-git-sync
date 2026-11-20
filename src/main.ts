@@ -392,7 +392,7 @@ export default class EasyGitSync extends Plugin {
 	async commitDraft(): Promise<boolean> {
 		const draft = this.draft;
 		const host = this.draftHost();
-		if (!draft?.repo || !host || this.committing) return false;
+		if (!draft?.repo || !host || this.committing || this.unloaded) return false;
 		if (this.otherGitPluginEnabled()) {
 			new Notice("Easy Git Sync: turn off the Git plugin on this device first.");
 			return false;
@@ -491,6 +491,7 @@ export default class EasyGitSync extends Plugin {
 	): Promise<void> {
 		// a sync that started meanwhile must finish against the target it read
 		while (this.running) await this.running.catch(() => {});
+		if (this.unloaded) return;
 		const connection = connectionOf(draft);
 		if (draft.token !== null) {
 			this.app.secretStorage.setSecret(this.tokenIdFor(connection), draft.token);
@@ -583,7 +584,9 @@ export default class EasyGitSync extends Plugin {
 		return this.draft ? this.peekLookup(connectionOf(this.draft), this.draftToken()) : null;
 	}
 
+	// an instance Hot Reload or a disable replaced still finishes its awaits, with an outdated device
 	saveDevice(): void {
+		if (this.unloaded) return;
 		this.app.saveLocalStorage(DEVICE_KEY, this.device);
 	}
 
@@ -703,6 +706,7 @@ export default class EasyGitSync extends Plugin {
 	}
 
 	async disconnect(): Promise<void> {
+		if (this.unloaded) return;
 		this.draft = null;
 		this.app.secretStorage.setSecret(this.tokenId, "");
 		this.device = {
